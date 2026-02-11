@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import threading
 import time
 from typing import List, Optional, Union, Callable, Any, Dict
 from contextlib import asynccontextmanager
@@ -368,6 +367,27 @@ class RedisService:
         """修剪列表"""
         return await self._execute_with_retry(self.redis.ltrim, key, start, end)
 
+    def __getattr__(self, name: str):
+        """动态代理未显式暴露的 Redis 命令，自动包装调用以支持重试机制。
+        对异步方法进行自动重试；对非异步方法，转为线程池执行避免阻塞事件循环。
+        """
+        async def _wrapper(*args, **kwargs):
+            if self.redis is None:
+                await self._ensure_connection()
+            if self.redis is None:
+                logger.error(f"Redis未连接，无法执行：{name}")
+                return None
+            attr = getattr(self.redis, name, None)
+            if attr is None:
+                raise AttributeError(name)
+            import inspect
+            if inspect.iscoroutinefunction(attr):
+                return await self._execute_with_retry(attr, *args, **kwargs)
+            else:
+                loop = asyncio.get_running_loop()
+                return await loop.run_in_executor(None, lambda: attr(*args, **kwargs))
+        return _wrapper
+
 
 
 
@@ -383,18 +403,30 @@ def get_redis_sync() -> RedisService:
     return redis_service
 
 
-_lock = threading.Lock()
+_lock = asyncio.Lock()
 _ref = 0
 
 @asynccontextmanager
 async def init_redis_client():
-    global  _ref
-    with _lock:
+    global _ref
+    need_init = False
+    # 增加引用计数并确定是否需要初始化
+    async with _lock:
+        _ref += 1
         if redis_service.redis is None:
+            need_init = True
+    if need_init:
+        try:
             await redis_service.init_redis()
-            _ref += 1
-    yield
-    with _lock:
-        _ref -= 1
-        if _ref == 0 and redis_service.redis is not None:
-            await redis_service.close_redis()
+        except Exception:
+            # 初始化失败，回退引用计数并抛出异常
+            async with _lock:
+                _ref -= 1
+            raise
+    try:
+        yield
+    finally:
+        async with _lock:
+            _ref -= 1
+            if _ref <= 0 and redis_service.redis is not None:
+                await redis_service.close_redis()
