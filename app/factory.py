@@ -2,11 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.core.config import settings
-from app.core.database import init_databases, init_db, close_db
+from app.core.database import init_databases, close_databases
 from app.core.redis import redis_service
 from starlette.staticfiles import StaticFiles
-from app.core.scheduler import get_scheduler
-from app.jobs import register_all
+# from app.core.scheduler import get_scheduler
+# from app.jobs import register_all
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -26,18 +26,18 @@ async def lifespan(app: FastAPI):
     await redis_service.init_redis()
     print("Redis连接初始化完成")
 
-    await register_all()  # 扫描并注册任务
-    await get_scheduler()  # 确保调度器启动
+    # await register_all()  # 扫描并注册任务
+    # await get_scheduler()  # 确保调度器启动
 
     yield
 
-    scheduler = await get_scheduler()
-    scheduler.shutdown(wait=False)
+    # scheduler = await get_scheduler()
+    # scheduler.shutdown(wait=False)
     # 关闭时执行
     print("应用关闭中...")
     
     # 关闭所有数据库连接
-    await close_db()
+    await close_databases()
     print("所有数据库连接已关闭")
     
     # 关闭Redis连接

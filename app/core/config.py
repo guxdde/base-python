@@ -8,12 +8,17 @@ from typing import Dict, Any, Optional, List
 class DatabaseConfig(BaseModel):
     """数据库配置"""
 
-    database_type: str="mysql"
+    database_type: str = "postgresql"
     host: str
     db: str
     port: int
     user: str
     password: str
+    pool_recycle: int = 300,
+    pool_size: int = 20,  # 基础连接池
+    max_overflow: int = 40,  # 溢出连接
+    pool_timeout: int = 30,  # 获取连接超时时间
+    expire_on_commit: bool = False
 
     @property
     def url(self) -> str:
