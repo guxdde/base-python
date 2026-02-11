@@ -55,6 +55,9 @@ class RabbitMQConfig(BaseModel):
     password: str
     virtual_host: str = "/"
 
+class CeleryConfig(BaseModel):
+    backend_url: Optional[str] = None  # 使用 Redis 作为结果后端示例
+    backend: Optional[str] = None      # 兼容老的后端配置，例如 'rpc://' 或 Redis URL
 
 class EmailConfig(BaseModel):
     """邮件配置"""
@@ -122,7 +125,7 @@ class Settings(BaseModel):
     sms: Optional[SmsConfig] = None
     attachment: AttachmentConfig
     wechat_service_account: Optional[WechatServiceAccountConfig]
-    timescaledb: PostgresqlConfig
+    timescaledb: DatabaseConfig
     tenant: TenantConfig
     aliyun: AliyunConfig
 
@@ -137,6 +140,9 @@ class Settings(BaseModel):
     cors_allow_credentials: bool = True  # 允许携带凭证
     cors_allow_methods: List[str] = ["*"]  # 允许的HTTP方法
     cors_allow_headers: List[str] = ["*"]  # 允许的请求头
+
+    # Celery 配置（可选）
+    celery: Optional[CeleryConfig] = None
 
     @classmethod
     def from_yaml(cls, yaml_path: str = "config.yaml") -> "Settings":
@@ -203,6 +209,10 @@ class Settings(BaseModel):
         )
         parsed_config["cors_allow_methods"] = cors_config.get("allow_methods", ["*"])
         parsed_config["cors_allow_headers"] = cors_config.get("allow_headers", ["*"])
+
+        if "celery" in config_data:
+            parsed_config["celery"] = CeleryConfig(**config_data["celery"])
+
 
         return cls(**parsed_config)
 
