@@ -1,0 +1,82 @@
+version: "3"
+
+services:
+  redis:
+    image: "redis:latest"
+#    restart: "${DOCKER_RESTART_POLICY:-unless-stopped}"
+#    stop_grace_period: "${DOCKER_STOP_GRACE_PERIOD:-3s}"
+#    volumes:
+#      - "/opt/redis_data:/data"
+#      - "/opt/redis_data:/etc/redis/redis.conf"
+
+    command: ["redis-server", "--requirepass km111"]
+    ports:
+      - "6379:6379"
+      
+  rabbitmq:
+    image: "rabbitmq:3-management"
+    hostname: "rabbitmq"
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin_mq
+      - RABBITMQ_DEFAULT_PASS=Km@MQ2024#secure
+      # 修改日志位置到数据目录下
+      - RABBITMQ_LOGS=/var/lib/rabbitmq/logs/rabbit.log
+      - RABBITMQ_SASL_LOGS=/var/lib/rabbitmq/logs/rabbit-sasl.log
+    ports:
+      - "5672:5672"   # AMQP 协议端口
+      - "15672:15672" # 管理界面端口
+    volumes:
+      - "/opt/rabbitmq/data:/var/lib/rabbitmq"
+      # 不再直接挂载到/var/log/rabbitmq
+    user: "999:999"  # 使用rabbitmq用户运行容器
+      
+  web:
+    # image: "finance:3.0"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn main:app --host 0.0.0.0 --port 8099 --workers 4
+    depends_on:
+      - "redis"
+      - "mysql"
+      - "rabbitmq"
+    ports:
+      - "8099:8099"
+      - "8080:8080"
+    volumes:
+      - "./:/app"
+      - "/media/uploads:/media/uploads"
+    environment:
+      - TZ=Asia/Shanghai
+
+  worker:
+#    image: "finance:3.0"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: dramatiq app.tasks.tasks --processes 8 --threads 32 --verbose --pid-file /tmp/dramatiq.pid
+    depends_on:
+      - "redis"
+      - "mysql"
+      - "rabbitmq"
+    volumes:
+      - "./:/app"
+    environment:
+      - TZ=Asia/Shanghai
+  mysql:
+    image: mysql:8.0
+    restart: always
+    container_name: finance_v3_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: unix1234
+      TZ: Asia/Shanghai
+      MYSQL_DATABASE: finance
+    ports:
+      - 3316:3306
+    volumes:
+      - "/opt/finance_v3_mysql/mysql/data:/var/lib/mysql"
+      - "/opt/finance_v3_mysql/mysql/conf/:/etc/mysql/conf.d/"
+      - "/opt/finance_v3_mysql/logs:/logs"
+
+#volumes:
+#  redis: {}
