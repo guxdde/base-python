@@ -1,0 +1,15 @@
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pdm-python
+*.PDF
+migrations
+tmp_files/*.pdf
+tmp_files/*.PDF
+tmp_files/*.txt
+config.yaml
+develop.env
+.idea
+.svn
