@@ -178,56 +178,56 @@ def num_tokens_from_string(string: str, encoding_name: str = 'cl100k_base') -> i
     return num_tokens
 
 
-async def verify_sms_code(phone: str, code: str) -> Dict[str, Any]:
-    """
-    验证手机验证码
-    
-    Args:
-        phone: 手机号
-        code: 验证码
-        
-    Returns:
-        Dict[str, Any]: 包含验证结果的字典
-            - success: 验证是否成功
-            - error: 错误代码（如果验证失败）
-            - message: 错误消息（如果验证失败）
-    """
-    # 验证手机号格式
-    if not is_valid_phone(phone):
-        return {
-            "success": False,
-            "error": "phone_verify_fail",
-            "message": "手机号格式不正确"
-        }
-    
-    # 从Redis获取验证码
-    redis = await get_redis()
-    key = sms_code_redis_key.format(phone=phone)
-    stored_code = await redis.get(key)
-
-    # 验证码不存在或已过期
-    if not stored_code:
-        return {
-            "success": False,
-            "error": "phone_verify_fail",
-            "message": "验证码已过期"
-        }
-    stored_code = stored_code.split('_')[0] if '_' in stored_code else stored_code
-
-    # 验证码不匹配
-    if stored_code != code:
-        return {
-            "success": False,
-            "error": "phone_verify_fail",
-            "message": "验证码错误"
-        }
-    
-    # 验证成功，删除验证码
-    await redis.delete(key)
-    
-    return {
-        "success": True
-    }
+# async def verify_sms_code(phone: str, code: str) -> Dict[str, Any]:
+#     """
+#     验证手机验证码
+#
+#     Args:
+#         phone: 手机号
+#         code: 验证码
+#
+#     Returns:
+#         Dict[str, Any]: 包含验证结果的字典
+#             - success: 验证是否成功
+#             - error: 错误代码（如果验证失败）
+#             - message: 错误消息（如果验证失败）
+#     """
+#     # 验证手机号格式
+#     if not is_valid_phone(phone):
+#         return {
+#             "success": False,
+#             "error": "phone_verify_fail",
+#             "message": "手机号格式不正确"
+#         }
+#
+#     # 从Redis获取验证码
+#     redis = await get_redis()
+#     key = sms_code_redis_key.format(phone=phone)
+#     stored_code = await redis.get(key)
+#
+#     # 验证码不存在或已过期
+#     if not stored_code:
+#         return {
+#             "success": False,
+#             "error": "phone_verify_fail",
+#             "message": "验证码已过期"
+#         }
+#     stored_code = stored_code.split('_')[0] if '_' in stored_code else stored_code
+#
+#     # 验证码不匹配
+#     if stored_code != code:
+#         return {
+#             "success": False,
+#             "error": "phone_verify_fail",
+#             "message": "验证码错误"
+#         }
+#
+#     # 验证成功，删除验证码
+#     await redis.delete(key)
+#
+#     return {
+#         "success": True
+#     }
 
 
 def generate_invite_code(user_id: int) -> str:
@@ -383,162 +383,162 @@ def float_is_zero(value, precision_digits=None, precision_rounding=None):
     return value == 0.0 or abs(float_round(value, precision_rounding=epsilon)) < epsilon
 
 
-async def get_user_rights(user_id: int) -> dict:
-    """
-    获取用户权益项
-    """
-    if user_id:
-        today = datetime.date.today().strftime("%Y%m%d")
-        redis_cli = await get_redis()
-        right_key = "user:right:control:{date}:{user}".format(date=today, user=user_id)
-        rights = await redis_cli.hgetall(right_key)
-        if rights:
-            return {key: literal_eval(value) for key, value in rights.items()}
-        else:
-            from app.services.user_right_service import UserRightService
-            from app.models.user import User
-            async with get_db_session() as db:
-                user = await db.get(User, user_id)
-                service = UserRightService(db, user)
-                rights = await service.init_user_active_right()
-                return {key: literal_eval(value) for key, value in rights.items()}
-    return {}
+# async def get_user_rights(user_id: int) -> dict:
+#     """
+#     获取用户权益项
+#     """
+#     if user_id:
+#         today = datetime.date.today().strftime("%Y%m%d")
+#         redis_cli = await get_redis()
+#         right_key = "user:right:control:{date}:{user}".format(date=today, user=user_id)
+#         rights = await redis_cli.hgetall(right_key)
+#         if rights:
+#             return {key: literal_eval(value) for key, value in rights.items()}
+#         else:
+#             from app.services.user_right_service import UserRightService
+#             from app.models.user import User
+#             async with get_db_session() as db:
+#                 user = await db.get(User, user_id)
+#                 service = UserRightService(db, user)
+#                 rights = await service.init_user_active_right()
+#                 return {key: literal_eval(value) for key, value in rights.items()}
+#     return {}
 
 
-async def set_user_rights(user_id: int, rights: dict):
-    """
-    设置用户权益项
-    """
-    if user_id:
-        today = datetime.date.today().strftime("%Y%m%d")
-        redis_cli = await get_redis()
-        right_key = "user:right:control:{date}:{user}".format(date=today, user=user_id)
-        data = {key: str(value) for key, value in rights.items()}
-        await redis_cli.hmset(right_key, data)
-        if await redis_cli.ttl(right_key) < 0:
-            today = datetime.datetime.now()
-            expire = int((datetime.datetime.strptime('{} 23:59:59'.format(today.strftime('%Y-%m-%d')),
-                                                     '%Y-%m-%d %H:%M:%S') - today).total_seconds() + 5)
-            await redis_cli.expire(right_key, expire)
-    return True
+# async def set_user_rights(user_id: int, rights: dict):
+#     """
+#     设置用户权益项
+#     """
+#     if user_id:
+#         today = datetime.date.today().strftime("%Y%m%d")
+#         redis_cli = await get_redis()
+#         right_key = "user:right:control:{date}:{user}".format(date=today, user=user_id)
+#         data = {key: str(value) for key, value in rights.items()}
+#         await redis_cli.hmset(right_key, data)
+#         if await redis_cli.ttl(right_key) < 0:
+#             today = datetime.datetime.now()
+#             expire = int((datetime.datetime.strptime('{} 23:59:59'.format(today.strftime('%Y-%m-%d')),
+#                                                      '%Y-%m-%d %H:%M:%S') - today).total_seconds() + 5)
+#             await redis_cli.expire(right_key, expire)
+#     return True
 
-async def user_rights_incrby(user_id: int, field: str, amount: int):
-    """用户权益次数更新"""
-    if user_id:
-        today = datetime.date.today().strftime("%Y%m%d")
-        redis_cli = await get_redis()
-        right_key = "user:right:control:{date}:{user}".format(date=today, user=user_id)
-        return await redis_cli.hincrby(right_key, field, amount)
-    return None
+# async def user_rights_incrby(user_id: int, field: str, amount: int):
+#     """用户权益次数更新"""
+#     if user_id:
+#         today = datetime.date.today().strftime("%Y%m%d")
+#         redis_cli = await get_redis()
+#         right_key = "user:right:control:{date}:{user}".format(date=today, user=user_id)
+#         return await redis_cli.hincrby(right_key, field, amount)
+#     return None
+#
+#
+# async def get_user_rights_readonly(user_id: int):
+#     """
+#     只读获取用户权益项
+#     """
+#     data = await get_user_rights(user_id)
+#     if data is not None:
+#         Rights = namedtuple("Rights", data.keys())
+#         rights = Rights(*data.values())
+#         return rights
+#     return None
 
+# async def clear_user_rights(user_ids: List[int]):
+#     """清除用户权益缓存"""
+#     if user_ids:
+#         today = datetime.date.today().strftime("%Y%m%d")
+#         redis_cli = await get_redis()
+#         right_key = "user:right:control:{date}:*".format(date=today)
+#         keys = await redis_cli.keys(right_key)
+#         pipe = redis_cli.pipeline()
+#         for key in keys:
+#             user_id = int(key.split(':')[-1])
+#             if user_id in user_ids:
+#                 await pipe.delete(key)
+#         await pipe.execute()
+#         return True
+#     return False
+#
 
-async def get_user_rights_readonly(user_id: int):
-    """
-    只读获取用户权益项
-    """
-    data = await get_user_rights(user_id)
-    if data is not None:
-        Rights = namedtuple("Rights", data.keys())
-        rights = Rights(*data.values())
-        return rights
-    return None
+# async def register_user_gift_rights(user_id: int):
+#     """注册用户赠送权益"""
+#     from app.models import UserRightRecord
+#     from app.models.rights import UserRightStatusEnum, RightTermEnum, RightEdition, RightType
+#
+#     async with get_db_session() as db:
+#         today = datetime.date.today()
+#         end_date = today + datetime.timedelta(days=30)
+#         result = await db.execute(
+#             select(RightEdition.id).where(
+#                 RightEdition.code == 'PROFESSIONAL'
+#             )
+#         )
+#         edition_id = result.scalar_one_or_none()
+#         type_result = await db.execute(
+#             select(RightType.id).where(
+#                 RightType.active == True
+#             )
+#         )
+#         for type_id in type_result:
+#             record = UserRightRecord(
+#                 user_id=user_id,
+#                 product_code='COMBO#PROFESSIONAL#MONTH',
+#                 order_no=f'REGISTER#GIFT#{user_id}',
+#                 status=UserRightStatusEnum.ACTIVE,
+#                 edition_id=edition_id,
+#                 type_id=type_id[0],
+#                 term=RightTermEnum.MONTH,
+#                 start_date=today,
+#                 end_date=end_date,
+#             )
+#             db.add(record)
+#         await db.commit()
+#     return True
 
-async def clear_user_rights(user_ids: List[int]):
-    """清除用户权益缓存"""
-    if user_ids:
-        today = datetime.date.today().strftime("%Y%m%d")
-        redis_cli = await get_redis()
-        right_key = "user:right:control:{date}:*".format(date=today)
-        keys = await redis_cli.keys(right_key)
-        pipe = redis_cli.pipeline()
-        for key in keys:
-            user_id = int(key.split(':')[-1])
-            if user_id in user_ids:
-                await pipe.delete(key)
-        await pipe.execute()
-        return True
-    return False
-
-
-async def register_user_gift_rights(user_id: int):
-    """注册用户赠送权益"""
-    from app.models import UserRightRecord
-    from app.models.rights import UserRightStatusEnum, RightTermEnum, RightEdition, RightType
-
-    async with get_db_session() as db:
-        today = datetime.date.today()
-        end_date = today + datetime.timedelta(days=30)
-        result = await db.execute(
-            select(RightEdition.id).where(
-                RightEdition.code == 'PROFESSIONAL'
-            )
-        )
-        edition_id = result.scalar_one_or_none()
-        type_result = await db.execute(
-            select(RightType.id).where(
-                RightType.active == True
-            )
-        )
-        for type_id in type_result:
-            record = UserRightRecord(
-                user_id=user_id,
-                product_code='COMBO#PROFESSIONAL#MONTH',
-                order_no=f'REGISTER#GIFT#{user_id}',
-                status=UserRightStatusEnum.ACTIVE,
-                edition_id=edition_id,
-                type_id=type_id[0],
-                term=RightTermEnum.MONTH,
-                start_date=today,
-                end_date=end_date,
-            )
-            db.add(record)
-        await db.commit()
-    return True
-
-class ModelClient:
-    """模型接口客户端"""
-
-    def __init__(self, host, timeout=30):
-        self.host = host
-        self.timeout = timeout
-        self._cli = None
-
-    def _get_client(self):
-        """延迟初始化客户端或重新创建"""
-        if self._cli is None or self._cli.is_closed:
-            self._cli = httpx.AsyncClient(base_url=self.host, timeout=self.timeout)
-        return self._cli
-
-    async def stream_chat(self, method: str, url: str, payload: dict):
-        client = self._get_client()
-        async with client.stream(method, url, json=payload) as r:
-            async for line in r.aiter_lines():
-                line = line.strip()
-                if line.startswith("data:"):
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        yield "[DONE]"
-                        return
-                    yield json.loads(data)
-
-    async def post(self, url: str, params: dict):
-        client = self._get_client()
-        try:
-            response = await client.post(url, json=params)
-            if response.is_success:
-                try:
-                    return True, response.json()
-                except json.JSONDecodeError:
-                    return True, response.text
-            else:
-                return False, {
-                    "status_code": response.status_code,
-                    "error": f"HTTP {response.status_code}",
-                    "message": response.text
-                }
-        except httpx.TimeoutException:
-            return False, {"error": "timeout", "message": "Request timeout"}
-        except httpx.RequestError as e:
-            return False, {"error": "request_error", "message": str(e)}
-        except Exception as e:
-            return False, {"error": "unexpected_error", "message": str(e)}
+# class ModelClient:
+#     """模型接口客户端"""
+#
+#     def __init__(self, host, timeout=30):
+#         self.host = host
+#         self.timeout = timeout
+#         self._cli = None
+#
+#     def _get_client(self):
+#         """延迟初始化客户端或重新创建"""
+#         if self._cli is None or self._cli.is_closed:
+#             self._cli = httpx.AsyncClient(base_url=self.host, timeout=self.timeout)
+#         return self._cli
+#
+#     async def stream_chat(self, method: str, url: str, payload: dict):
+#         client = self._get_client()
+#         async with client.stream(method, url, json=payload) as r:
+#             async for line in r.aiter_lines():
+#                 line = line.strip()
+#                 if line.startswith("data:"):
+#                     data = line[5:].strip()
+#                     if data == "[DONE]":
+#                         yield "[DONE]"
+#                         return
+#                     yield json.loads(data)
+#
+#     async def post(self, url: str, params: dict):
+#         client = self._get_client()
+#         try:
+#             response = await client.post(url, json=params)
+#             if response.is_success:
+#                 try:
+#                     return True, response.json()
+#                 except json.JSONDecodeError:
+#                     return True, response.text
+#             else:
+#                 return False, {
+#                     "status_code": response.status_code,
+#                     "error": f"HTTP {response.status_code}",
+#                     "message": response.text
+#                 }
+#         except httpx.TimeoutException:
+#             return False, {"error": "timeout", "message": "Request timeout"}
+#         except httpx.RequestError as e:
+#             return False, {"error": "request_error", "message": str(e)}
+#         except Exception as e:
+#             return False, {"error": "unexpected_error", "message": str(e)}
