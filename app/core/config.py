@@ -56,8 +56,27 @@ class RabbitMQConfig(BaseModel):
     virtual_host: str = "/"
 
 class CeleryConfig(BaseModel):
-    backend_url: Optional[str] = None  # 使用 Redis 作为结果后端示例
-    backend: Optional[str] = None      # 兼容老的后端配置，例如 'rpc://' 或 Redis URL
+    # backend_url: Optional[str] = None  # 使用 Redis 作为结果后端示例
+    # backend: Optional[str] = None      # 兼容老的后端配置，例如 'rpc://' 或 Redis URL
+    result_backend: str # "redis://localhost:6379/1" # 或 "rpc://" / None
+    task_default_queue: str="default"
+    task_acks_late: bool=True
+    worker_prefetch_multiplier: int=1
+    default_soft_time_limit: int=30  # seconds, 可被单个任务覆盖
+    default_time_limit: int=60
+    # retry_policy:
+    #     max_retries: 3
+    #     default_backoff: 5
+    # beat:
+    #     enabled: false
+    #     schedule: {}
+    # rabbitmq:
+    #     dlx:
+    #     enabled: true
+    #     exchange: "dlx.exchange"
+    #     queue: "dlq.default"
+    #     routing_key: "dlq"
+
 
 class EmailConfig(BaseModel):
     """邮件配置"""
