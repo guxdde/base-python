@@ -1,12 +1,66 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import logging
+from typing import Any, Optional
+
 from app.core.config import settings
 from app.core.database import init_databases, close_databases
 from app.core.redis import redis_service
 from starlette.staticfiles import StaticFiles
 # from app.core.scheduler import get_scheduler
 # from app.jobs import register_all
+
+from .core import celery as core_celery
+from .core import config as core_config
+
+_logger = logging.getLogger(__name__)
+
+_celery_app: Optional[Any] = None
+
+def get_celery_app(settings: Any = None) -> Any:
+    """
+    Return a configured Celery app singleton.
+    - If `settings` is None, will try to use core_config.settings if present.
+    - Uses the _celery_app_instance factory in app.core.celery when available.
+    """
+    global _celery_app
+    if _celery_app is not None:
+        return _celery_app
+
+    if settings is None:
+        settings = getattr(core_config, "settings", None)
+
+    app_factory = getattr(core_celery, "_celery_app_instance", None)
+    if app_factory is None:
+        try:
+            app_factory = core_celery._CeleryApp()
+            core_celery._celery_app_instance = app_factory
+        except Exception as e:
+            _logger.exception("Failed to instantiate Celery factory: %s", e)
+            app_factory = None
+
+    if app_factory is not None:
+        try:
+            _celery_app = app_factory.get_app(settings)
+            return _celery_app
+        except Exception:
+            _logger.exception("Failed to build Celery app using factory; falling back")
+
+    # Fallback: minimal Celery instance (best-effort)
+    try:
+        from celery import Celery
+        broker = None
+        try:
+            broker = core_celery._build_broker_url_from_settings(settings)
+        except Exception:
+            pass
+        _celery_app = Celery("app", broker=broker)
+    except Exception:
+        _logger.exception("Fallback Celery app creation failed")
+        _celery_app = None
+
+    return _celery_app
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
