@@ -28,25 +28,17 @@ def _build_broker_url() -> str:
     pass_enc = quote_plus(str(password))
     return f"amqp://{user_enc}:{pass_enc}@{host}:{port}{vh}"
 
-def _build_broker_url_from_settings(settings):
+def _build_broker_url_from_settings():
     """
     Try to obtain broker URL: prefer explicit celery.broker, fallback to existing builder if present.
     """
-    c = core_config.get_celery_settings(settings)
-    if c.get("broker"):
-        return c.get("broker")
-    # fall back to existing builder if defined in this module
     try:
-        return _build_broker_url(settings)  # existing function in this file
+        return _build_broker_url()  # existing function in this file
     except Exception:
         # last-resort: try to use redis settings
         try:
-            redis_settings = getattr(settings, "redis", None) or (settings.get("redis") if isinstance(settings, dict) else None)
-            if redis_settings:
-                host = redis_settings.get("host", "localhost") if isinstance(redis_settings, dict) else getattr(redis_settings, "host", "localhost")
-                port = redis_settings.get("port", 6379) if isinstance(redis_settings, dict) else getattr(redis_settings, "port", 6379)
-                db = redis_settings.get("db", 1) if isinstance(redis_settings, dict) else getattr(redis_settings, "db", 1)
-                return f"redis://{host}:{port}/{db}"
+            if settings.redis and settings.redis.url:
+                return settings.redis.url
         except Exception:
             pass
     return None
@@ -54,14 +46,13 @@ def _build_broker_url_from_settings(settings):
 class _CeleryApp:
     _app: Optional[Celery] = None
 
-    def get_app(self, settings):
+    def get_app(self):
         """
         Build or return a configured Celery app using project settings.
         """
-        # ...existing code...
-        celery_settings = core_config.get_celery_settings(settings)
-        broker_url = _build_broker_url_from_settings(settings) or celery_settings.get("broker")
-        result_backend = celery_settings.get("result_backend")
+        celery_settings = settings.celery
+        broker_url = _build_broker_url_from_settings()
+        result_backend = celery_settings.result_backend
 
         app = Celery(
             "app",
@@ -71,34 +62,34 @@ class _CeleryApp:
 
         # base config from settings
         app.conf.update(
-            task_acks_late=celery_settings.get("task_acks_late"),
-            worker_prefetch_multiplier=celery_settings.get("worker_prefetch_multiplier"),
-            task_default_queue=celery_settings.get("task_default_queue"),
+            task_acks_late=celery_settings.task_acks_late,
+            worker_prefetch_multiplier=celery_settings.worker_prefetch_multiplier,
+            task_default_queue=celery_settings.task_default_queue,
             task_default_delivery_mode=2,
             task_serializer="json",
             accept_content=["json"],
             result_serializer="json",
-            task_soft_time_limit=celery_settings.get("default_soft_time_limit"),
-            task_time_limit=celery_settings.get("default_time_limit"),
+            task_soft_time_limit=celery_settings.default_soft_time_limit,
+            task_time_limit=celery_settings.default_time_limit,
         )
 
         # Setup DLX + queues: create a default queue with DLX args
         try:
-            dlx_conf = celery_settings.get("rabbitmq", {}).get("dlx", {})
-            if dlx_conf.get("enabled"):
-                dlx_exchange = Exchange(dlx_conf.get("exchange", "dlx.exchange"), type="direct", durable=True)
-                dlq_name = dlx_conf.get("queue", "dlq.default")
-                dlq = Queue(name=dlq_name, exchange=dlx_exchange, routing_key=dlx_conf.get("routing_key", "dlq"), durable=True)
+            dlx_conf = celery_settings.rabbitmq
+            if dlx_conf.enabled:
+                dlx_exchange = Exchange(dlx_conf.exchange, type="direct", durable=True)
+                dlq_name = dlx_conf.queue
+                dlq = Queue(name=dlq_name, exchange=dlx_exchange, routing_key=dlx_conf.routing_key, durable=True)
                 # Main queue with dead-letter exchange args
                 main_exchange = Exchange("celery", type="direct", durable=True)
                 main_queue = Queue(
-                    name=celery_settings.get("task_default_queue"),
+                    name=celery_settings.task_default_queue,
                     exchange=main_exchange,
-                    routing_key=celery_settings.get("task_default_queue"),
+                    routing_key=celery_settings.task_default_queue,
                     durable=True,
                     queue_arguments={
                         "x-dead-letter-exchange": dlx_exchange.name,
-                        "x-dead-letter-routing-key": dlx_conf.get("routing_key", "dlq"),
+                        "x-dead-letter-routing-key": dlx_conf.routing_key,
                     },
                 )
                 app.conf.task_queues = (main_queue, dlq)
@@ -106,9 +97,9 @@ class _CeleryApp:
                 # single queue
                 main_exchange = Exchange("celery", type="direct", durable=True)
                 main_queue = Queue(
-                    name=celery_settings.get("task_default_queue"),
+                    name=celery_settings.task_default_queue,
                     exchange=main_exchange,
-                    routing_key=celery_settings.get("task_default_queue"),
+                    routing_key=celery_settings.task_default_queue,
                     durable=True,
                 )
                 app.conf.task_queues = (main_queue,)
@@ -117,9 +108,9 @@ class _CeleryApp:
 
         # beat schedule from settings
         try:
-            beat_conf = celery_settings.get("beat", {})
-            if beat_conf.get("enabled") and isinstance(beat_conf.get("schedule"), dict):
-                app.conf.beat_schedule = beat_conf.get("schedule")
+            beat_conf = celery_settings.beat
+            if beat_conf.enabled and isinstance(beat_conf.schedule, dict):
+                app.conf.beat_schedule = beat_conf.schedule
         except Exception:
             pass
 
@@ -198,12 +189,12 @@ def _attach_task_signals(app: Celery, settings, celery_settings):
         If DLX is disabled or publish fails, just log with structured info.
         """
         try:
-            dlx_conf = celery_settings.get("rabbitmq", {}).get("dlx", {})
-            if not dlx_conf.get("enabled"):
+            dlx_conf = celery_settings.rabbitmq
+            if not dlx_conf.enabled:
                 _logger.error("Task %s failed: %s", task_id, str(exception))
                 return
 
-            broker_url = _build_broker_url_from_settings(settings)
+            broker_url = _build_broker_url_from_settings()
             if not broker_url:
                 _logger.error("No broker_url for DLQ publish for task %s", task_id)
                 return
@@ -217,9 +208,9 @@ def _attach_task_signals(app: Celery, settings, celery_settings):
                 "exception": str(exception),
                 "traceback": str(traceback),
             }
-            exchange_name = dlx_conf.get("exchange")
-            routing_key = dlx_conf.get("routing_key", "dlq")
-            dlq_name = dlx_conf.get("queue")
+            exchange_name = dlx_conf.exchange
+            routing_key = dlx_conf.routing_key
+            dlq_name = dlx_conf.queue
 
             # Publish using kombu Connection/Producer
             try:
@@ -250,21 +241,14 @@ def celery_task(*dargs, queue: str = None, soft_time_limit: int = None, time_lim
     """
     def _wrap(func):
         # create task options merged with settings defaults
-        try:
-            settings = None
-            # try to import project settings if available
-            from .config import settings as project_settings  # may or may not exist
-            settings = project_settings
-        except Exception:
-            settings = None
 
-        defaults = core_config.get_celery_settings(settings if settings is not None else {})
+        defaults = settings.celery
         task_opts = {}
         if queue:
             task_opts["queue"] = queue
         # resolve soft/time limits
-        task_opts["soft_time_limit"] = soft_time_limit or defaults.get("default_soft_time_limit")
-        task_opts["time_limit"] = time_limit or defaults.get("default_time_limit")
+        task_opts["soft_time_limit"] = soft_time_limit or defaults.default_soft_time_limit
+        task_opts["time_limit"] = time_limit or defaults.default_time_limit
 
         # apply as celery.task decorator
         celery_app = None
@@ -273,7 +257,7 @@ def celery_task(*dargs, queue: str = None, soft_time_limit: int = None, time_lim
             celery_app = globals().get("_celery_app_instance")
             if celery_app is None:
                 # best effort: create a transient app with minimal config
-                broker = _build_broker_url_from_settings(settings) or defaults.get("broker")
+                broker = _build_broker_url_from_settings()
                 celery_app = Celery("app_temp", broker=broker)
         except Exception:
             celery_app = Celery("app_temp")
