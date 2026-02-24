@@ -3,16 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
 from typing import Any, Optional
+from starlette.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_databases, close_databases
 from app.core.redis import redis_service
-from starlette.staticfiles import StaticFiles
-# from app.core.scheduler import get_scheduler
-# from app.jobs import register_all
-
 from .core import celery as core_celery
-from .core import config as core_config
 
 _logger = logging.getLogger(__name__)
 
@@ -28,8 +24,6 @@ def get_celery_app(settings: Any = None) -> Any:
     if _celery_app is not None:
         return _celery_app
 
-    if settings is None:
-        settings = getattr(core_config, "settings", None)
 
     app_factory = getattr(core_celery, "_celery_app_instance", None)
     if app_factory is None:
@@ -42,7 +36,7 @@ def get_celery_app(settings: Any = None) -> Any:
 
     if app_factory is not None:
         try:
-            _celery_app = app_factory.get_app(settings)
+            _celery_app = app_factory.get_app()
             return _celery_app
         except Exception:
             _logger.exception("Failed to build Celery app using factory; falling back")
@@ -71,10 +65,7 @@ async def lifespan(app: FastAPI):
     # 初始化多数据库连接
     await init_databases()
     print("多数据库连接初始化完成")
-    
-    # # 初始化数据库表（如果需要）
-    # await init_db()
-    # print("数据库表初始化完成")
+
     
     # 初始化Redis
     await redis_service.init_redis()
@@ -85,8 +76,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # scheduler = await get_scheduler()
-    # scheduler.shutdown(wait=False)
     # 关闭时执行
     print("应用关闭中...")
     
