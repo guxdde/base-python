@@ -55,27 +55,36 @@ class RabbitMQConfig(BaseModel):
     password: str
     virtual_host: str = "/"
 
+class CeleryRetryConfig(BaseModel):
+    """Celery重试配置"""
+
+    max_retries: int = 3
+    default_backoff: int = 5
+
+class CeleryBeatConfig(BaseModel):
+    """Celery心跳配置"""
+
+    enabled: bool = False
+    schedule: Dict[str, Any] = {}
+
+class CeleryRabbitMQConfig(BaseModel):
+    """Celery RabbitMQ配置"""
+
+    enabled: bool = True
+    exchange: str = "dlx.exchange"
+    queue: str = "dlq.default"
+    routing_key: str = "dlq"
+
 class CeleryConfig(BaseModel):
-    # backend_url: Optional[str] = None  # 使用 Redis 作为结果后端示例
-    # backend: Optional[str] = None      # 兼容老的后端配置，例如 'rpc://' 或 Redis URL
     result_backend: str # "redis://localhost:6379/1" # 或 "rpc://" / None
     task_default_queue: str="default"
     task_acks_late: bool=True
     worker_prefetch_multiplier: int=1
     default_soft_time_limit: int=30  # seconds, 可被单个任务覆盖
     default_time_limit: int=60
-    # retry_policy:
-    #     max_retries: 3
-    #     default_backoff: 5
-    # beat:
-    #     enabled: false
-    #     schedule: {}
-    # rabbitmq:
-    #     dlx:
-    #     enabled: true
-    #     exchange: "dlx.exchange"
-    #     queue: "dlq.default"
-    #     routing_key: "dlq"
+    retry_policy: CeleryRetryConfig
+    beat: CeleryBeatConfig
+    rabbitmq: CeleryRabbitMQConfig
 
 
 class EmailConfig(BaseModel):
@@ -230,7 +239,22 @@ class Settings(BaseModel):
         parsed_config["cors_allow_headers"] = cors_config.get("allow_headers", ["*"])
 
         if "celery" in config_data:
-            parsed_config["celery"] = CeleryConfig(**config_data["celery"])
+            celery = config_data["celery"]
+            retry_policy = {}
+            if "retry_policy" in celery:
+                retry_policy = celery["retry_policy"]
+            beat = {}
+            if "beat" in celery:
+                beat = celery["beat"]
+            rabbitmq = {}
+            if "rabbitmq" in celery:
+                rabbitmq = celery["rabbitmq"]
+            celery['retry_policy'] = CeleryRetryConfig(**retry_policy)
+            celery['beat'] = CeleryBeatConfig(**beat)
+            celery['rabbitmq'] = CeleryRabbitMQConfig(**rabbitmq)
+
+            parsed_config["celery"] = CeleryConfig(**celery)
+
 
 
         return cls(**parsed_config)
