@@ -94,6 +94,10 @@ class DatabaseManager:
 
 dbm = DatabaseManager()
 
+async def get_session(name: str = "default") -> AsyncSession:
+    """Get an async database session. Caller is responsible for closing it."""
+    return await dbm.get_session(name)
+
 async def init_databases():
     """初始化数据库"""
     await dbm.register(settings.default_db)
