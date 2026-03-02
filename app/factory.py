@@ -8,7 +8,7 @@ from starlette.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.database import init_databases, close_databases
 from app.core.redis import redis_service
-from .core import celery as core_celery
+from app.core import celery as core_celery
 
 _logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ def get_celery_app(settings: Any = None) -> Any:
         from celery import Celery
         broker = None
         try:
-            broker = core_celery._build_broker_url_from_settings(settings)
+            broker = core_celery._build_broker_url_from_settings()
         except Exception:
             pass
         _celery_app = Celery("app", broker=broker)
