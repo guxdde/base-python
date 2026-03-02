@@ -1,5 +1,6 @@
 import json
 import logging
+import asyncio
 from typing import Optional, Callable, Any
 from celery import Celery, signals, Task
 from celery.exceptions import SoftTimeLimitExceeded
@@ -11,6 +12,9 @@ from . import config as core_config
 from . import database as core_database
 from . import redis as core_redis
 from . import logger as core_logger
+from .task_registry import TaskRegistry, task_registry
+from .beat import BeatScheduler, beat_scheduler
+from .dead_letter import DeadLetterManager
 
 _logger = logging.getLogger(__name__)
 
@@ -106,11 +110,18 @@ class _CeleryApp:
         except Exception as e:
             _logger.exception("Failed to configure queues/DLX: %s", e)
 
-        # beat schedule from settings
+        # beat schedule from settings OR code-defined schedules
         try:
             beat_conf = celery_settings.beat
             if beat_conf.enabled and isinstance(beat_conf.schedule, dict):
                 app.conf.beat_schedule = beat_conf.schedule
+            # Also load code-defined schedules from BeatScheduler
+            code_schedule = beat_scheduler.get_schedule()
+            if code_schedule:
+                if not hasattr(app.conf, 'beat_schedule') or not app.conf.beat_schedule:
+                    app.conf.beat_schedule = {}
+                app.conf.beat_schedule.update(code_schedule)
+                _logger.info(f"Loaded {len(code_schedule)} scheduled tasks from code")
         except Exception:
             pass
 
@@ -185,63 +196,96 @@ def _attach_task_signals(app: Celery, settings, celery_settings):
     @signals.task_failure.connect
     def _task_failure_handler(sender=None, task_id=None, exception=None, args=None, kwargs=None, traceback=None, einfo=None, **extra):
         """
-        On failure, attempt to publish metadata to DLQ exchange/queue configured in celery settings.
-        If DLX is disabled or publish fails, just log with structured info.
+        On failure, save task metadata to database dead letter table.
         """
         try:
-            dlx_conf = celery_settings.rabbitmq
-            if not dlx_conf.enabled:
-                _logger.error("Task %s failed: %s", task_id, str(exception))
-                return
-
-            broker_url = _build_broker_url_from_settings()
-            if not broker_url:
-                _logger.error("No broker_url for DLQ publish for task %s", task_id)
-                return
-
-            # Prepare DLQ payload
-            payload = {
-                "task_id": task_id,
-                "task_name": getattr(sender, "name", None) if sender else None,
-                "args": args,
-                "kwargs": kwargs,
-                "exception": str(exception),
-                "traceback": str(traceback),
-            }
-            exchange_name = dlx_conf.exchange
-            routing_key = dlx_conf.routing_key
-            dlq_name = dlx_conf.queue
-
-            # Publish using kombu Connection/Producer
+            task_name = getattr(sender, "name", None) if sender else None
+            queue = kwargs.get('_queue') if kwargs else None
+            worker = extra.get('hostname') if extra else None
+            
+            _logger.error(
+                "Task %s failed: %s (task_name: %s, queue: %s)",
+                task_id, str(exception), task_name, queue
+            )
+            
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             try:
-                with Connection(broker_url) as conn:
-                    producer = Producer(conn)
-                    producer.publish(
-                        json.dumps(payload),
-                        exchange=Exchange(exchange_name, type="direct"),
-                        routing_key=routing_key,
-                        declare=[Exchange(exchange_name, type="direct")],
-                        serializer="json",
-                        retry=True,
-                    )
-            except Exception:
-                _logger.exception("Failed to publish failure info for task %s to DLQ", task_id)
+                loop.run_until_complete(_save_failure_to_db(
+                    task_id=task_id,
+                    task_name=task_name,
+                    args=args,
+                    kwargs=kwargs,
+                    exception=str(exception),
+                    traceback=str(traceback) if traceback else None,
+                    queue=queue,
+                    worker=worker,
+                ))
+            finally:
+                loop.close()
+                
         except Exception:
             _logger.exception("Unhandled exception in task_failure handler for %s", task_id)
 
 
+async def _save_failure_to_db(
+    task_id: str,
+    task_name: str,
+    args: tuple = None,
+    kwargs: dict = None,
+    exception: str = None,
+    traceback: str = None,
+    queue: str = None,
+    worker: str = None,
+):
+    """Save failure record to database."""
+    try:
+        db_session = None
+        if hasattr(core_database, "get_session"):
+            db_session = await core_database.get_session()
+        elif hasattr(core_database, "dbm"):
+            db_session = await core_database.dbm.get_session()
+        
+        if db_session is None:
+            _logger.error("No database session available for saving dead letter")
+            return
+        
+        manager = DeadLetterManager(db_session)
+        
+        celery_settings = settings.celery
+        max_retries = getattr(celery_settings, 'max_retries', 3) if celery_settings else 3
+        
+        await manager.save_failure(
+            task_id=task_id,
+            task_name=task_name,
+            args=args,
+            kwargs=kwargs,
+            exception=exception,
+            traceback=traceback,
+            queue=queue,
+            worker=worker,
+            max_retries=max_retries,
+        )
+        await db_session.close()
+    except Exception:
+        _logger.exception("Failed to save failure to database for task %s", task_id)
+
+
 # Decorator to create tasks easily from code, supporting per-task timeouts and queue override
-def celery_task(*dargs, queue: str = None, soft_time_limit: int = None, time_limit: int = None, **dkwargs):
+def celery_task(*dargs, queue: str = None, soft_time_limit: int = None, time_limit: int = None, 
+                name: str = None, description: str = None, tags: list = None, **dkwargs):
     """
     Usage:
       @celery_task(queue='low', soft_time_limit=10, time_limit=20)
       def my_task(...):
           ...
-    Falls back to defaults from config.get_celery_settings.
+    
+    Auto-registers the task to TaskRegistry.
     """
     def _wrap(func):
+        task_name = name or func.__name__
+        
         # create task options merged with settings defaults
-
         defaults = settings.celery
         task_opts = {}
         if queue:
@@ -249,19 +293,37 @@ def celery_task(*dargs, queue: str = None, soft_time_limit: int = None, time_lim
         # resolve soft/time limits
         task_opts["soft_time_limit"] = soft_time_limit or defaults.default_soft_time_limit
         task_opts["time_limit"] = time_limit or defaults.default_time_limit
+        
+        # Apply additional options
+        for key, value in dkwargs.items():
+            task_opts[key] = value
 
-        # apply as celery.task decorator
+        # Get or create Celery app
         celery_app = None
         try:
-            # if there is a global celery app factory in this module, try to use it
-            celery_app = globals().get("_celery_app_instance")
-            if celery_app is None:
-                # best effort: create a transient app with minimal config
-                broker = _build_broker_url_from_settings()
-                celery_app = Celery("app_temp", broker=broker)
+            app_factory = globals().get("_celery_app_instance")
+            if app_factory is not None:
+                celery_app = app_factory.get_app()
         except Exception:
-            celery_app = Celery("app_temp")
+            pass
+        
+        if celery_app is None:
+            broker = _build_broker_url_from_settings()
+            celery_app = Celery("app_temp", broker=broker)
 
+        # Register to TaskRegistry
+        task_registry.register(
+            name=task_name,
+            func=func,
+            queue=queue,
+            soft_time_limit=task_opts.get("soft_time_limit"),
+            time_limit=task_opts.get("time_limit"),
+            options=task_opts,
+            description=description,
+            tags=tags or [],
+        )
+        
+        # Apply as celery.task decorator
         return celery_app.task(**task_opts)(func)
 
     # support both @celery_task and @celery_task(...)
