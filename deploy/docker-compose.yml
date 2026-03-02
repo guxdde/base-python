@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  redis:
+    extends:
+      file: infra.yml
+      service: redis
+
+  postgres:
+    extends:
+      file: infra.yml
+      service: postgres
+
+  rabbitmq:
+    extends:
+      file: infra.yml
+      service: rabbitmq
+
+  openresty:
+    extends:
+      file: app.yml
+      service: openresty
+
+  fastapi:
+    extends:
+      file: app.yml
+      service: fastapi
+
+  celery-worker:
+    extends:
+      file: app.yml
+      service: celery-worker
+
+  celery-beat:
+    extends:
+      file: app.yml
+      service: celery-beat

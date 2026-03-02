@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  openresty:
+    image: openresty/openresty:1.25-alpine
+    container_name: app-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/html:/usr/share/nginx/html
+    depends_on:
+      fastapi:
+        condition: service_started
+    restart: unless-stopped
+
+  fastapi:
+    build:
+      context: ../src
+      dockerfile: Dockerfile
+    container_name: app-fastapi
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../src:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: ../src
+      dockerfile: Dockerfile
+    container_name: app-celery-worker
+    env_file:
+      - .env
+    volumes:
+      - ../src:/app
+    depends_on:
+      - rabbitmq
+      - redis
+      - postgres
+    command: celery -A worker worker --loglevel=info --concurrency=6 -n worker1@%h
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: ../src
+      dockerfile: Dockerfile
+    container_name: app-celery-beat
+    env_file:
+      - .env
+    volumes:
+      - ../src:/app
+    depends_on:
+      - rabbitmq
+      - redis
+      - postgres
+    command: celery -A worker beat --loglevel=info
+    restart: unless-stopped
