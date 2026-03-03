@@ -18,8 +18,10 @@ logger = getLogger("alembic")
 # 动态设置数据库URL
 def get_database_url():
     """从配置中获取数据库URL，使用同步连接器"""
-    db_config = settings.timescaledb
+    db_config = settings.default_db
     # 使用postgresql作为同步连接器，适合Alembic迁移
+    if db_config.database_type == 'mysql':
+        return f'mysql+pymysql://{db_config.user}:{db_config.password}@{db_config.host}:{db_config.port}/{db_config.db}'
     return f'postgresql+psycopg2://{db_config.user}:{db_config.password}@{db_config.host}:{db_config.port}/{db_config.db}'
 
 def run_migrations_offline():
