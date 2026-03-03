@@ -6,17 +6,79 @@ requiring a fully fleshed multi-database Alembic setup in this MVP.
 
 from logging import getLogger
 from alembic import context
+from sqlalchemy import pool
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy import engine_from_config
+
+from app.core.database import Base
+from app.core.config import settings
 
 logger = getLogger("alembic")
+# 动态设置数据库URL
+def get_database_url():
+    """从配置中获取数据库URL，使用同步连接器"""
+    db_config = settings.timescaledb
+    # 使用postgresql作为同步连接器，适合Alembic迁移
+    return f'postgresql+psycopg2://{db_config.user}:{db_config.password}@{db_config.host}:{db_config.port}/{db_config.db}'
 
 def run_migrations_offline():
-    logger.info("Migrations offline (no operation).")
+    url = get_database_url()
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+def do_run_migrations(connection: Connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata)
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+async def run_async_migrations() -> None:
+    """In this scenario we need to create an Engine
+    and associate a connection with the context.
+
+    """
+
+    connectable = async_engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    async with connectable.connect() as connection:
+        await connection.run_sync(do_run_migrations)
+
+    await connectable.dispose()
+
 
 def run_migrations_online():
-    logger.info("Migrations online (no operation).")
+    # 设置数据库URL到配置中
+    # 设置数据库URL到配置中
+    config.set_main_option('sqlalchemy.url', get_database_url())
+
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection, target_metadata=target_metadata
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
 
 config = context.config
-target_metadata = None
+target_metadata = Base.metadata
 
 def main():
     run_migrations_offline()
