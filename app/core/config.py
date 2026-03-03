@@ -3,8 +3,6 @@ from pathlib import Path
 from pydantic import BaseModel, field_validator
 from typing import Dict, Any, Optional, List
 
-
-
 class DatabaseConfig(BaseModel):
     """数据库配置"""
 
@@ -86,7 +84,6 @@ class CeleryConfig(BaseModel):
     beat: CeleryBeatConfig
     rabbitmq: CeleryRabbitMQConfig
 
-
 class EmailConfig(BaseModel):
     """邮件配置"""
 
@@ -95,18 +92,6 @@ class EmailConfig(BaseModel):
     username: str
     password: str
     default_sender: str
-
-
-class SmsConfig(BaseModel):
-    """短信配置"""
-
-    access_key_id: str
-    access_key_secret: str
-    sign_name: str  # 这个字段会用作from_参数
-    template_code: str
-    region: str = "cn-hangzhou"  # 默认使用杭州区域
-
-
 
 class AttachmentConfig(BaseModel):
     """附件配置"""
@@ -122,8 +107,6 @@ class WechatServiceAccountConfig(BaseModel):
     app_secret: str
     token: str
     encoding_aes_key: str
-
-
 
 class TenantConfig(BaseModel):
     """租户配置"""
@@ -150,12 +133,11 @@ class Settings(BaseModel):
     redis: RedisConfig
     rabbitmq: RabbitMQConfig
     email: EmailConfig
-    sms: Optional[SmsConfig] = None
     attachment: AttachmentConfig
     wechat_service_account: Optional[WechatServiceAccountConfig]
     timescaledb: DatabaseConfig
     tenant: TenantConfig
-    aliyun: AliyunConfig
+    aliyun: Optional[AliyunConfig]
 
     # JWT配置（兼容性配置）
     jwt_secret_key: str = "your-secret-key-here"
@@ -200,10 +182,6 @@ class Settings(BaseModel):
         # 邮件配置
         if "email" in config_data:
             parsed_config["email"] = EmailConfig(**config_data["email"])
-
-        # 短信配置
-        if "sms" in config_data:
-            parsed_config["sms"] = SmsConfig(**config_data["sms"])
 
         # 附件配置
         if "attachment" in config_data:
