@@ -3,8 +3,8 @@ import logging
 import time
 from typing import List, Optional, Union, Callable, Any, Dict
 from contextlib import asynccontextmanager
-import aioredis
-from aioredis.connection import EncodableT
+import redis.asyncio as aioredis
+from redis.asyncio import Redis
 
 from .config import settings
 
@@ -15,7 +15,7 @@ class RedisService:
     """Redis服务类"""
 
     def __init__(self):
-        self.redis: Optional[aioredis.Redis] = None
+        self.redis: Optional[Redis] = None
         self._connecting = False
         self._last_health_check = 0
         self._health_check_interval = 60  # 健康检查间隔（秒）
@@ -117,7 +117,7 @@ class RedisService:
             return await operation(*args, **kwargs)
         except (
             aioredis.ConnectionError,
-            aioredis.TimeoutError,
+            asyncio.TimeoutError,
             ConnectionResetError,
             BrokenPipeError,
             asyncio.exceptions.CancelledError,
@@ -355,7 +355,7 @@ class RedisService:
         """读取列表元素"""
         return await self._execute_with_retry(self.redis.xrange, key, start, end, count)
 
-    async def eval(self, lua: str, numkeys: int, *keys_and_args:EncodableT):
+    async def eval(self, lua: str, numkeys: int, *keys_and_args: Any):
         """执行Lua脚本"""
         return await self._execute_with_retry(self.redis.eval, lua, numkeys, *keys_and_args)
 

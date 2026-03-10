@@ -1,5 +1,4 @@
 from sqlalchemy import Column, BigInteger, String, DateTime, Integer, ForeignKey, Enum, LargeBinary
-from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from enum import Enum as BaseEnum
 
@@ -23,10 +22,9 @@ class Attachments(Base):
     file_path = Column(String(255), nullable=True, comment='文件路径')
     file_size = Column(Integer, nullable=True, comment='文件大小')
     mime_type = Column(String(100), nullable=False, comment='MIME类型')
-    uploader_id = Column(Integer, ForeignKey("user.id"), nullable=False, index=True, comment='上传者ID')
+    uploader_id = Column(Integer, nullable=True, index=True, comment='上传者ID')
     created_at = Column(DateTime(timezone=True), server_default=func.now(), comment='创建时间')
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), comment='更新时间')
     checksum = Column(String(32), comment='校验和', index=True)
     datas = Column(LargeBinary, comment='数据')
 
-    # avatar_user = relationship("User", back_populates="avatar", foreign_keys="[User.avatar_id]")

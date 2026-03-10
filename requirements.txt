@@ -7,6 +7,8 @@ starlette==0.27.0
 sqlalchemy>=2.0.35
 aiomysql==0.2.0
 PyMySQL==1.1.0
+psycopg2==2.9.1
+asyncpg==0.31.0
 
 # Redis
 redis>=5.0.0

@@ -1,9 +1,9 @@
 from enum import Enum
-from sqlalchemy import Column, String, Boolean, DateTime, BigInteger, Index
+from sqlalchemy import Column, String, Boolean, DateTime, BigInteger, Index, Enum as SQLEnum
 from sqlalchemy.sql import func
 
 from app.core.database import Base
-from app.models.abstract import BigIntBaseModel
+from app.models.abstract import IntBaseModel
 
 
 class UserStatusEnum(str, Enum):
@@ -13,7 +13,7 @@ class UserStatusEnum(str, Enum):
     BANNED = "banned"
 
 
-class User(BigIntBaseModel):
+class User(Base, IntBaseModel):
     """用户模型
     
     基于 BigIntBaseModel，包含:
@@ -70,7 +70,7 @@ class User(BigIntBaseModel):
         comment="头像ID"
     )
     status = Column(
-        UserStatusEnum,
+        SQLEnum(UserStatusEnum),
         nullable=False,
         default=UserStatusEnum.ACTIVE,
         comment="用户状态"

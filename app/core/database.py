@@ -279,19 +279,19 @@ async def close_databases():
 #         expire_on_commit=False
 #     )
 #
-# async def get_db():
-#     """获取默认数据库会话 - 依赖注入方式"""
-#     if default_session_factory is None:
-#         await init_databases()
-#
-#     async with default_session_factory() as session:
-#         try:
-#             yield session
-#         except Exception:
-#             await session.rollback()
-#             raise
-#         finally:
-#             await session.close()
+async def get_db():
+    """获取默认数据库会话 - 依赖注入方式"""
+    if dbm is None or not dbm._initialized:
+        await dbm.init_databases()
+
+    async with dbm.get_session() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 #
 #
 # async def get_news_db():

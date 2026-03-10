@@ -12,10 +12,10 @@ class DatabaseConfig(BaseModel):
     port: int
     user: str
     password: str
-    pool_recycle: int = 300,
-    pool_size: int = 20,  # 基础连接池
-    max_overflow: int = 40,  # 溢出连接
-    pool_timeout: int = 30,  # 获取连接超时时间
+    pool_recycle: int = 300
+    pool_size: int = 20  # 基础连接池
+    max_overflow: int = 40  # 溢出连接
+    pool_timeout: int = 30  # 获取连接超时时间
     expire_on_commit: bool = False
 
     @property
@@ -132,12 +132,11 @@ class Settings(BaseModel):
     default_db: DatabaseConfig
     redis: RedisConfig
     rabbitmq: RabbitMQConfig
-    email: EmailConfig
+    # email: Optional[EmailConfig]
     attachment: AttachmentConfig
-    wechat_service_account: Optional[WechatServiceAccountConfig]
-    timescaledb: DatabaseConfig
-    tenant: TenantConfig
-    aliyun: Optional[AliyunConfig]
+    # wechat_service_account: Optional[WechatServiceAccountConfig]
+    tenant: Optional[TenantConfig]
+    # aliyun: Optional[AliyunConfig]
 
     # JWT配置（兼容性配置）
     jwt_secret_key: str = "your-secret-key-here"

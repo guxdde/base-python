@@ -10,10 +10,9 @@ from starlette.endpoints import HTTPEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from app.api.response import ResponseCode, error_massage, success_response
-from app.core import get_redis
-from app.core.database import get_db, get_db_session
-from app.utils import ModelClient
+from app.api.response import ResponseCode, error_massage
+from app.core.database import dbm, get_session, get_db
+
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -46,7 +45,7 @@ class BaseHTTPEndpoint(HTTPEndpoint):
                     raise
         else:
             # 使用新的多数据库支持
-            async with get_db_session(db_type) as session:
+            async with get_session(db_type) as session:
                 yield session
 
     async def parse_json_body(self, request: Request) -> Dict[str, Any]:
