@@ -168,13 +168,13 @@ uvicorn main:app --host 0.0.0.0 --port 8080
 ### 2. 启动 Celery Worker
 
 ```bash
-celery -A app.core.celery._celery_app_instance worker --loglevel=info
+celery -A main:celery_app worker --loglevel=info
 ```
 
 ### 3. 启动 Celery Beat (定时任务)
 
 ```bash
-celery -A app.core.celery._celery_app_instance beat --loglevel=info
+celery -A main:celery_app beat --loglevel=info
 ```
 
 ## API 接口

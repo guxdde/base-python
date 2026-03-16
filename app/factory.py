@@ -14,7 +14,7 @@ _logger = logging.getLogger(__name__)
 
 _celery_app: Optional[Any] = None
 
-def get_celery_app(settings: Any = None) -> Any:
+def get_celery_app() -> Any:
     """
     Return a configured Celery app singleton.
     - If `settings` is None, will try to use core_config.settings if present.
