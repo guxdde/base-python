@@ -38,3 +38,5 @@ python-dotenv>=1.0.0
 setuptools>=65.0
 mineru==2.7.6
 pandas==3.0.1
+aiolimiter==1.2.1
+aiohttp==3.13.3

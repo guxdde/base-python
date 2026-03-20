@@ -34,15 +34,19 @@ class PDFService:
 
         # 设置图片分析API URL和模型
 
-        self.api_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+        self.image_api_url = settings.research_report.image_analyze_url
+        #"https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
-        self.image_model = "qwen-vl-max"  # 可选: qwen-vl-max, qwen-vl-plus, qwen-vl-chat, qvq-max
+        self.image_model = settings.research_report.image_analyze_model
+        #"qwen-vl-max"  # 可选: qwen-vl-max, qwen-vl-plus, qwen-vl-chat, qvq-max
 
         # 设置表格分析API URL和模型
 
-        self.text_api_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+        self.text_api_url = settings.research_report.text_analyze_url
+        #"https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
 
-        self.table_model = "qwen-plus-latest"  # 使用纯文本模型分析表格
+        self.table_model = settings.research_report.text_analyze_model
+        #"qwen-plus-latest"  # 使用纯文本模型分析表格
 
         # 创建速率限制器，每秒最多2个请求
 
@@ -154,7 +158,7 @@ class PDFService:
             record.output_path = output_dir
             await db.commit()
         # markdown_file_path = f'{output_dir}/{filename}.md'
-        await self.process_image_analyze(f'{output_dir}/{filename}/vlm')
+        await self.process_image_analyze(report_type, report_id,f'{output_dir}/{filename}/vlm')
 
         return f'{output_dir}/{filename}.md'
 
@@ -468,7 +472,7 @@ class PDFService:
         cleaned = re.sub(r'\s{2,}', ' ', cleaned)
         return cleaned.strip()
 
-    async def process_markdown_file(self, md_file_path: str,
+    async def process_markdown_file(self, report_type: str, report_id: int, md_file_path: str,
                                     output_file_path: Optional[str] = None,
                                     image_dir: Optional[str] = None,
                                     concurrency: int = 5) -> bool:
@@ -605,12 +609,19 @@ class PDFService:
             f.write(content)
 
         _logger.info(f"处理完成: {output_file_path}")
+        async with dbm.session() as db:
+            if report_type == "stock":
+                query = select(StockResearchReportRecord).where(StockResearchReportRecord.report_id == report_id)
+            else:
+                query = select(IndustryResearchReportRecord).where(IndustryResearchReportRecord.report_id == report_id)
+            record = await db.execute(query)
+            record = record.scalars().first()
+            record.process_status = ProcessStatusEnum.integrated
+            await db.commit()
         return True
 
-    async def process_image_analyze(self, directory: str,
-                                recursive: bool = True,
-                                output_dir: Optional[str] = None,
-                                concurrency: int = 5) -> int:
+    async def process_image_analyze(self, report_type: str, report_id: int, directory: str, recursive: bool = True,
+                                    output_dir: Optional[str] = None, concurrency: int = 5) -> int:
         """
         批量处理目录中的Markdown文件
 
@@ -637,7 +648,7 @@ class PDFService:
 
         semaphore = asyncio.Semaphore(concurrency)
 
-        async def process_file(md_file):
+        async def process_file(report_type, report_id, md_file):
             async with semaphore:
                 output_path = None
                 if output_dir:
@@ -647,13 +658,41 @@ class PDFService:
 
                 img_dir = md_file.parent / "images"
                 return await self.process_markdown_file(
-                    str(md_file),
+                    report_type, report_id, str(md_file),
                     str(output_path) if output_path else None,
                     str(img_dir) if img_dir.exists() else None,
                     concurrency=1
                 )
 
-        results = await asyncio.gather(*[process_file(f) for f in md_files])
+        results = await asyncio.gather(*[process_file(report_type, report_id, f) for f in md_files])
         success_count = sum(results)
         _logger.info(f"处理完成: {success_count}/{len(md_files)} 个文件")
         return success_count
+
+    async def extract_company_info(self, report_type: str, report_id: int):
+        if report_type == "industry":
+            return {}
+        async with dbm.session() as db:
+            query = select(StockResearchReportRecord).where(StockResearchReportRecord.report_id == report_id)
+            record = await db.execute(query)
+            record = record.scalars().first()
+            if not record:
+                return {}
+            return {
+                'ts_code': record.ts_code,
+                'company_name': record.company_name,
+            }
+
+    async def extract_industry_info(self, report_type: str, report_id: int):
+        async with dbm.session() as db:
+            if report_type == "stock":
+                query = select(StockResearchReportRecord).where(StockResearchReportRecord.report_id == report_id)
+            else:
+                query = select(IndustryResearchReportRecord).where(IndustryResearchReportRecord.report_id == report_id)
+            record = await db.execute(query)
+            record = record.scalars().first()
+            if not record:
+                return {}
+            return {
+                'industry_name': record.industry_name,
+            }
