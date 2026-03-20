@@ -33,7 +33,7 @@ class DatabaseManager:
         self._factories: Dict[str, sessionmaker] = {}
         self._initialized = False
 
-    async def register(self, cfg: "DatabaseConfig") -> None:
+    async def register(self, cfg: "DatabaseConfig", db_alias: str = "default") -> None:
         # 仅在需要时创建引擎与工厂
         if cfg.db in self._engines:
             return
@@ -45,9 +45,9 @@ class DatabaseManager:
                                   future=True,
                                   pool_pre_ping=True,
                                   echo=False)
-        self._configs[cfg.db] = cfg
-        self._engines[cfg.db] = eng
-        self._factories[cfg.db] = sessionmaker(eng, class_=AsyncSession, expire_on_commit=cfg.expire_on_commit)
+        self._configs[db_alias] = cfg
+        self._engines[db_alias] = eng
+        self._factories[db_alias] = sessionmaker(eng, class_=AsyncSession, expire_on_commit=cfg.expire_on_commit)
         self._initialized = True
 
     async def init_databases(self) -> None:
