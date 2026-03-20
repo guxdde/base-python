@@ -146,6 +146,46 @@ def process_task(data: dict) -> dict:
     return {"result": "success"}
 ```
 
+### Celery 定时任务
+定时任务定义在 `app/tasks/scheduled_tasks.py`，使用 `BeatScheduler` 装饰器注册：
+
+```python
+from app.core.beat import BeatScheduler
+from app.core.celery import celery_task
+
+# 方式1: Cron 表达式
+@BeatScheduler.every("*/5 * * * *")  # 每5分钟
+@celery_task()
+def sync_data():
+    pass
+
+# 方式2: 固定间隔
+@BeatScheduler.interval(hours=1)  # 每小时
+@celery_task()
+def cleanup():
+    pass
+
+# 方式3: 详细 Cron 参数
+@BeatScheduler.crontab(hour=9, minute=0)  # 每天9:00
+@celery_task()
+def daily_task():
+    pass
+
+# 方式4: 手动添加
+BeatScheduler.add(
+    task_name="weekly_task",
+    task="app.tasks.scheduled_tasks.weekly_task_func",
+    schedule="0 0 * * 1",  # 每周一
+)
+```
+
+| 装饰器 | 参数 | 说明 |
+|--------|------|------|
+| `every()` | cron 字符串 | `"*/10 * * * *"` 每10分钟 |
+| `interval()` | seconds/minutes/hours | `hours=2` 每2小时 |
+| `crontab()` | minute/hour/day_of_month/month/day_of_week | 精确 Cron 参数 |
+| `add()` | task_name/task/schedule | 手动注册 |
+
 ### API 端点
 - 继承 `BaseHTTPEndpoint` 以保持响应格式一致
 - 使用 `success_response()` 和 `error_response()` 辅助方法
@@ -182,6 +222,9 @@ base-python/
 ├── requirements.txt           # 依赖
 ├── app/
 │   ├── factory.py            # FastAPI 工厂
+│   ├── tasks/                # 定时任务定义
+│   │   ├── __init__.py
+│   │   └── scheduled_tasks.py # 定时任务示例
 │   ├── core/                 # 核心组件
 │   │   ├── celery.py         # Celery 配置
 │   │   ├── config.py         # 配置模型

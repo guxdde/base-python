@@ -71,6 +71,10 @@ async def lifespan(app: FastAPI):
     await redis_service.init_redis()
     print("Redis连接初始化完成")
 
+    # 导入定时任务模块，注册定时任务
+    from app.tasks import scheduled_tasks  # noqa: F401
+    _logger.info("定时任务模块已加载")
+    
     # await register_all()  # 扫描并注册任务
     # await get_scheduler()  # 确保调度器启动
 
