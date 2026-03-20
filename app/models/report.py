@@ -18,9 +18,9 @@ class IndustryResearchReport(ExternalBase):
     trade_date = Column(Date, nullable=True, comment="发布时间")
     title = Column(String(512), nullable=True, comment="研报标题")
     org_name = Column("orgName", String(128), nullable=True, comment="发布组织")
-    org_code = Column(String(32), nullable=True, comment="组织代码")
-    info_code = Column(String(32), nullable=True, comment="研报获取关键字段")
-    download = Column(String(16), nullable=True, comment="是否下载 (Y 代表下载，N 代表未下载)")
+    org_code = Column("orgCode", String(32), nullable=True, comment="组织代码")
+    info_code = Column("infoCode", String(32), nullable=True, comment="研报获取关键字段")
+    download = Column( String(16), nullable=True, comment="是否下载 (Y 代表下载，N 代表未下载)")
 
     __table_args__ = (
         Index(
@@ -59,8 +59,8 @@ class StockResearchReport(ExternalBase):
     company_name = Column(String(32), nullable=True, comment="股票名称")
     title = Column(String(512), nullable=True, comment="研报标题")
     org_name = Column("orgName", String(128), nullable=True, comment="发布组织")
-    org_code = Column(String(32), nullable=True, comment="组织代码")
-    info_code = Column(String(32), nullable=True, comment="研报获取关键字段")
+    org_code = Column("orgCode", String(32), nullable=True, comment="组织代码")
+    info_code = Column("infoCode", String(32), nullable=True, comment="研报获取关键字段")
     industry_name = Column(String(32), nullable=True, comment="行业名称（股票归属）")
     download = Column(String(16), nullable=True, comment="是否下载（Y 代表下载，N 代表未下载）")
 

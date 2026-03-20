@@ -3,6 +3,7 @@ from app.models.user import User
 from app.models.tenant import Tenant, TenantAuthToken
 from app.models.attachment import Attachments
 from app.models.dead_letter import DeadLetterRecord
+from app.models.chunk import IndustryResearchReportRecord, StockResearchReportRecord
 
 __all__ = [
     "IntBaseModel",
@@ -18,4 +19,7 @@ __all__ = [
     "TenantAuthToken",
     "Attachments",
     "DeadLetterRecord",
+
+    "IndustryResearchReportRecord",
+    "StockResearchReportRecord",
 ]

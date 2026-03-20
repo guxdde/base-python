@@ -36,3 +36,5 @@ python-multipart>=0.0.6
 email-validator>=2.2.0
 python-dotenv>=1.0.0
 setuptools>=65.0
+mineru==2.7.6
+pandas==3.0.1

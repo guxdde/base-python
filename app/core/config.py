@@ -126,6 +126,18 @@ class AliyunConfig(BaseModel):
     tts_voice: str = "xiaoyun"
     tts_volume: int = 50
 
+class ResearchReport(BaseModel):
+    """研究报告配置"""
+    report_dir: str = 'research_report/'
+    output_dir: str = 'research_report/output/'
+    mineru_server: str = "http://192.168.1.119:30000"
+    api_key: str = "sk-47e9b2d46b29431aa654ac8b46259c2d"
+    image_analyze_url: str
+    image_analyze_model: str
+    text_analyze_url: str
+    text_analyze_model: str
+    rate_limiter: int
+
 class Settings(BaseModel):
     """应用配置"""
 
@@ -152,6 +164,10 @@ class Settings(BaseModel):
 
     # Celery 配置（可选）
     celery: Optional[CeleryConfig] = None
+
+    research_report: Optional[ResearchReport] = None
+
+    report_db: Optional[DatabaseConfig] = None
 
     @classmethod
     def from_yaml(cls, yaml_path: str = "config.yaml") -> "Settings":
@@ -232,7 +248,13 @@ class Settings(BaseModel):
 
             parsed_config["celery"] = CeleryConfig(**celery)
 
+        if "research_report" in config_data:
+            research_report = config_data["research_report"]
+            parsed_config["research_report"] = ResearchReport(**research_report)
 
+        if "report_db" in config_data:
+            report_db = config_data["report_db"]
+            parsed_config["report_db"] = DatabaseConfig(**report_db)
 
         return cls(**parsed_config)
 

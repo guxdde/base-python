@@ -101,6 +101,7 @@ async def get_session(name: str = "default") -> AsyncSession:
 async def init_databases():
     """初始化数据库"""
     await dbm.register(settings.default_db)
+    await dbm.register(settings.report_db, db_alias="report_db")
     await dbm.init_databases()
 
 async def close_databases():
