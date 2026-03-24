@@ -15,6 +15,7 @@ from app.models import IndustryResearchReportRecord
 from app.models.chunk import ProcessStatusEnum, StockResearchReportRecord
 from app.models.report import StockResearchReport, DownloadStatusEnum, IndustryResearchReport
 from app.core.database import dbm
+from app.services.markdown_splitter import MarkdownReportSplitter
 
 _logger = logging.getLogger(__name__)
 
@@ -51,6 +52,15 @@ class PDFService:
         # 创建速率限制器，每秒最多2个请求
 
         self.rate_limiter = AsyncLimiter(settings.research_report.rate_limiter, 1)
+
+        # 初始化 Markdown 分块器
+        self._splitter: Optional[MarkdownReportSplitter] = None
+
+    @property
+    def splitter(self) -> MarkdownReportSplitter:
+        if self._splitter is None:
+            self._splitter = MarkdownReportSplitter(concurrency=5)
+        return self._splitter
 
     async def process_pdf(self, report_type: str, report_id: int):
         """
@@ -229,7 +239,7 @@ class PDFService:
                     ]
                 }]
 
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(
                     None,
                     lambda: MultiModalConversation.call(
@@ -323,7 +333,7 @@ class PDFService:
             dashscope.api_key = self.api_key
 
             async with self.rate_limiter:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(
                     None,
                     lambda: Generation.call(
@@ -359,7 +369,7 @@ class PDFService:
 
             async with self.rate_limiter:
                 async with aiohttp.ClientSession() as session:
-                    async with session.post(self.table_api_url, headers=headers, json=payload) as resp:
+                    async with session.post(self.text_api_url, headers=headers, json=payload) as resp:
                         if resp.status != 200:
                             return {"title": "表格分析失败", "description": f"HTTP错误: {resp.status}"}
 
@@ -696,3 +706,110 @@ class PDFService:
             return {
                 'industry_name': record.industry_name,
             }
+
+    async def chunk_markdown(self, report_type: str, report_id: int) -> dict:
+        """对研报 Markdown 进行分块处理
+
+        Args:
+            report_type: 研报类型，"stock" 或 "industry"
+            report_id: 研报 ID
+
+        Returns:
+            处理结果 dict
+        """
+        async with dbm.session() as db:
+            if report_type == "stock":
+                record_query = select(StockResearchReportRecord).where(
+                    StockResearchReportRecord.report_id == report_id
+                )
+            else:
+                record_query = select(IndustryResearchReportRecord).where(
+                    IndustryResearchReportRecord.report_id == report_id
+                )
+
+            result = await db.execute(record_query)
+            record = result.scalars().first()
+
+            if not record:
+                return {"success": False, "message": "研报记录不存在"}
+
+            if record.process_status != ProcessStatusEnum.integrated:
+                return {"success": False, "message": f"当前状态为 {record.process_status}，需要先完成 integrated 状态"}
+
+            output_path = record.output_path
+            if not output_path or not os.path.exists(output_path):
+                return {"success": False, "message": "输出路径不存在"}
+
+            md_filename = record.filename
+            md_file_path = os.path.join(output_path, md_filename, "vlm", f"{md_filename}.md")
+
+            if not os.path.exists(md_file_path):
+                md_file_path = os.path.join(output_path, md_filename, f"{md_filename}.md")
+
+            if not os.path.exists(md_file_path):
+                return {"success": False, "message": f"Markdown 文件不存在: {md_file_path}"}
+
+            try:
+                chunks = self.splitter.split_file(md_file_path)
+                if not chunks:
+                    return {"success": False, "message": "分块结果为空"}
+
+                json_output_path = os.path.join(output_path, "chunks.json")
+                save_success = self.splitter.save_chunks_json(chunks, json_output_path)
+
+                if not save_success:
+                    return {"success": False, "message": "保存 JSON 失败"}
+
+                record.process_status = ProcessStatusEnum.chunked
+                await db.commit()
+
+                return {
+                    "success": True,
+                    "message": "分块成功",
+                    "chunk_count": len(chunks),
+                    "output_path": json_output_path,
+                }
+
+            except Exception as e:
+                _logger.error(f"分块处理失败: {e}")
+                return {"success": False, "message": f"分块失败: {str(e)}"}
+
+    async def chunk_batch(self, report_type: str, report_ids: list[int]) -> list[dict]:
+        """批量并行处理研报分块
+
+        Args:
+            report_type: 研报类型，"stock" 或 "industry"
+            report_ids: 研报 ID 列表
+
+        Returns:
+            处理结果列表
+        """
+        semaphore = asyncio.Semaphore(self.splitter.concurrency)
+
+        async def process_one(report_id: int) -> dict:
+            async with semaphore:
+                return await self.chunk_markdown(report_type, report_id)
+
+        results = await asyncio.gather(
+            *[process_one(rid) for rid in report_ids],
+            return_exceptions=True
+        )
+
+        processed_results = []
+        for rid, result in zip(report_ids, results):
+            if isinstance(result, Exception):
+                processed_results.append({
+                    "report_id": rid,
+                    "success": False,
+                    "message": str(result),
+                })
+            else:
+                processed_results.append({
+                    "report_id": rid,
+                    **result,
+                })
+
+        success_count = sum(1 for r in processed_results if r.get("success", False))
+        _logger.info(f"批量分块完成: {success_count}/{len(report_ids)} 成功")
+
+        return processed_results

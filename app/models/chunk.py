@@ -46,7 +46,6 @@ class StockResearchReportRecord(Base, IntBaseModel):
     org_name = Column(String(128), nullable=True, comment="发布组织")
     org_code = Column(String(32), nullable=True, comment="组织代码")
     info_code = Column(String(32), nullable=True, comment="研报获取关键字段")
-    content = Column(Text, nullable=True, comment="内容")
     process_start = Column(DateTime(timezone=True), nullable=True, comment="开始处理时间")
     process_end = Column(DateTime(timezone=True), nullable=True, comment="结束处理时间")
     process_status = Column(SQLEnum(ProcessStatusEnum), default=ProcessStatusEnum.no, index=True, comment="处理状态")

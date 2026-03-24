@@ -33,6 +33,10 @@ requests>=2.32.0
 
 # Utils
 python-multipart>=0.0.6
+
+# LangChain & RAG
+langchain>=0.3.0
+langchain-text-splitters>=0.3.0
 email-validator>=2.2.0
 python-dotenv>=1.0.0
 setuptools>=65.0
