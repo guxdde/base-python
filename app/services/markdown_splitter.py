@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from langchain.text_splitter import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
-from langchain.schema import Document
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
 
 from app.core.database import dbm
 from app.models.chunk import ProcessStatusEnum, StockResearchReportRecord, IndustryResearchReportRecord
@@ -95,10 +95,7 @@ class MarkdownReportSplitter:
         for chunk in chunks:
             result.append({
                 "content": chunk.page_content,
-                "metadata": {
-                    "source": chunk.metadata.get("source", ""),
-                    "headers": chunk.metadata.get("headers", [])
-                }
+                "metadata": chunk.metadata
             })
         return result
 

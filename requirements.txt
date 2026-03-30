@@ -37,6 +37,9 @@ python-multipart>=0.0.6
 # LangChain & RAG
 langchain>=0.3.0
 langchain-text-splitters>=0.3.0
+
+# Vector Database
+pymilvus==2.6.10
 email-validator>=2.2.0
 python-dotenv>=1.0.0
 setuptools>=65.0
@@ -44,3 +47,5 @@ mineru==2.7.6
 pandas==3.0.1
 aiolimiter==1.2.1
 aiohttp==3.13.3
+langchain==1.2.13
+langchain-text-splitters==1.1.1

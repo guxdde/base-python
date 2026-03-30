@@ -4,7 +4,7 @@ from mineru.cli.common import aio_do_parse, read_fn
 import logging
 import os
 import re
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 import asyncio
 import base64
 from aiolimiter import AsyncLimiter
@@ -16,6 +16,7 @@ from app.models.chunk import ProcessStatusEnum, StockResearchReportRecord
 from app.models.report import StockResearchReport, DownloadStatusEnum, IndustryResearchReport
 from app.core.database import dbm
 from app.services.markdown_splitter import MarkdownReportSplitter
+from app.services.vector_service import insert_chunks_to_milvus
 
 _logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ class PDFService:
                     if report_type == "stock":
                         record = StockResearchReportRecord(report_id=report.id, filename=report.title, trade_date=report.trade_date,
                                                            file_path=file_path, process_start=datetime.datetime.now(),
-                                                           ts_code=report.ts_code, symbol=report.symbol, company_name=report.company_name,
+                                                           ts_code=report.ts_code or report.symbol, symbol=report.symbol, company_name=report.company_name,
                                                            org_name=report.org_name, org_code=report.org_code,
                                                            info_code=report.info_code, process_status=ProcessStatusEnum.no)
                     else:
@@ -168,7 +169,14 @@ class PDFService:
             record.output_path = output_dir
             await db.commit()
         # markdown_file_path = f'{output_dir}/{filename}.md'
-        await self.process_image_analyze(report_type, report_id,f'{output_dir}/{filename}/vlm')
+        await self.process_image_analyze(report_type, report_id, f'{output_dir}/{filename}/vlm')
+
+        _logger.info(f"开始分块处理: {report_type}:{report_id}")
+        chunk_result = await self.chunk_markdown(report_type, report_id)
+        if chunk_result.get("success"):
+            _logger.info(f"分块处理成功: {chunk_result.get('chunk_count')} 个 chunk")
+        else:
+            _logger.warning(f"分块处理失败: {chunk_result.get('message')}")
 
         return f'{output_dir}/{filename}.md'
 
@@ -517,8 +525,17 @@ class PDFService:
         img_matches = list(re.finditer(img_pattern, content))
 
         if not html_matches and not img_matches:
-            _logger.info(f"未找到HTML表格或图片: {md_file_path}")
-            return False
+            _logger.info(f"Mineru 已处理完成，无需额外分析，直接更新状态: {md_file_path}")
+            async with dbm.session() as db:
+                if report_type == "stock":
+                    query = select(StockResearchReportRecord).where(StockResearchReportRecord.report_id == report_id)
+                else:
+                    query = select(IndustryResearchReportRecord).where(IndustryResearchReportRecord.report_id == report_id)
+                record = await db.execute(query)
+                record = record.scalars().first()
+                record.process_status = ProcessStatusEnum.integrated
+                await db.commit()
+            return True
 
         md_dir = os.path.dirname(os.path.abspath(md_file_path))
         tasks = []
@@ -588,7 +605,17 @@ class PDFService:
             })
 
         if not tasks:
-            return False
+            _logger.info(f"所有内容已被 Mineru 处理，无需额外分析，直接更新状态: {md_file_path}")
+            async with dbm.session() as db:
+                if report_type == "stock":
+                    query = select(StockResearchReportRecord).where(StockResearchReportRecord.report_id == report_id)
+                else:
+                    query = select(IndustryResearchReportRecord).where(IndustryResearchReportRecord.report_id == report_id)
+                record = await db.execute(query)
+                record = record.scalars().first()
+                record.process_status = ProcessStatusEnum.integrated
+                await db.commit()
+            return True
 
         semaphore = asyncio.Semaphore(concurrency)
 
@@ -750,9 +777,43 @@ class PDFService:
                 return {"success": False, "message": f"Markdown 文件不存在: {md_file_path}"}
 
             try:
+                base_metadata = {
+                    "report_type": report_type,
+                    "report_id": report_id,
+                    "filename": record.filename,
+                    "trade_date": record.trade_date.strftime("%Y-%m-%d") if record.trade_date else None,
+                    "ts_code": getattr(record, 'ts_code', None),
+                    "company_name": getattr(record, 'company_name', None),
+                    "industry_name": getattr(record, 'industry_name', None),
+                    "org_name": record.org_name,
+                }
+
                 chunks = self.splitter.split_file(md_file_path)
                 if not chunks:
                     return {"success": False, "message": "分块结果为空"}
+
+                semaphore = asyncio.Semaphore(10)
+
+                async def process_chunk_with_metadata(chunk, index: int):
+                    async with semaphore:
+                        chunk.metadata.update(base_metadata)
+                        chunk.metadata["chunk_index"] = index
+
+                        summary = await self.generate_summary(chunk.page_content)
+                        chunk.metadata["summary"] = summary
+
+                        if report_type == "industry":
+                            related_stocks = await self.extract_related_stocks(chunk.page_content)
+                            chunk.metadata["related_stocks"] = related_stocks
+                        else:
+                            chunk.metadata["related_stocks"] = []
+
+                        return chunk
+
+                chunks = await asyncio.gather(*[
+                    process_chunk_with_metadata(chunk, i)
+                    for i, chunk in enumerate(chunks)
+                ])
 
                 json_output_path = os.path.join(output_path, "chunks.json")
                 save_success = self.splitter.save_chunks_json(chunks, json_output_path)
@@ -763,16 +824,242 @@ class PDFService:
                 record.process_status = ProcessStatusEnum.chunked
                 await db.commit()
 
+                vector_result = await insert_chunks_to_milvus(report_type, report_id)
+                if vector_result.get("success"):
+                    record.process_status = ProcessStatusEnum.chunked_to_db
+                    record.process_end = datetime.datetime.now()
+                    await db.commit()
+
                 return {
                     "success": True,
-                    "message": "分块成功",
+                    "message": "分块成功" + ("，向量入库成功" if vector_result.get("success") else ""),
                     "chunk_count": len(chunks),
                     "output_path": json_output_path,
+                    "vector_inserted": vector_result.get("success", False),
                 }
 
             except Exception as e:
                 _logger.error(f"分块处理失败: {e}")
                 return {"success": False, "message": f"分块失败: {str(e)}"}
+
+    async def generate_summary(self, content: str) -> str:
+        """使用 LLM 生成摘要
+
+        Args:
+            content: 文本内容
+
+        Returns:
+            摘要文本，失败返回空字符串
+        """
+        prompt = """请为以下研报内容生成100-200字的摘要。
+
+要求：
+1. 概括核心观点和数据
+2. 保持客观中立
+3. 不要添加解释性文字
+4. 摘要内容不超过200字
+5. 直接返回摘要文字，不要其他格式
+
+研报内容：
+{content}"""
+
+        full_prompt = prompt.format(content=content[:3000])
+
+        try:
+            import dashscope
+            from dashscope import Generation
+            dashscope.api_key = self.api_key
+
+            async with self.rate_limiter:
+                loop = asyncio.get_running_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: Generation.call(
+                        model=self.table_model,
+                        prompt=full_prompt,
+                        result_format='message',
+                        stream=False
+                    )
+                )
+
+                if response.status_code == 200:
+                    summary = response.output.text if hasattr(response.output, 'text') else str(response.output)
+                    summary = summary.strip()
+                    if len(summary) > 200:
+                        summary = summary[:197] + "..."
+                    if len(summary) > 500:
+                        summary = summary[:500]
+                    return summary
+                else:
+                    _logger.warning(f"摘要生成失败: {response.message}")
+                    return ""
+
+        except ImportError:
+            return await self._generate_summary_http(content)
+        except Exception as e:
+            _logger.error(f"摘要生成异常: {e}")
+            return ""
+
+    async def _generate_summary_http(self, content: str) -> str:
+        """使用 HTTP 方式生成摘要"""
+        try:
+            import aiohttp
+            prompt = """请为以下研报内容生成100-200字的摘要。
+
+要求：
+1. 概括核心观点和数据
+2. 保持客观中立
+3. 直接返回摘要文字
+4. 摘要内容不超过200字
+
+内容：
+{content}
+"""
+
+            full_prompt = prompt.format(content=content[:3000])
+
+            headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+            payload = {
+                "model": self.table_model,
+                "input": {"prompt": full_prompt},
+                "parameters": {"stream": False}
+            }
+
+            async with self.rate_limiter:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(self.text_api_url, headers=headers, json=payload) as resp:
+                        if resp.status != 200:
+                            return ""
+                        result = await resp.json()
+                        if 'output' in result and 'text' in result['output']:
+                            summary = result['output']['text'].strip()
+                            if len(summary) > 200:
+                                summary = summary[:197] + "..."
+                            if len(summary) > 500:
+                                summary = summary[:500]
+                            return summary
+                        return ""
+        except Exception as e:
+            _logger.error(f"HTTP 摘要生成失败: {e}")
+            return ""
+
+    async def extract_related_stocks(self, content: str) -> List[Dict[str, str]]:
+        """使用 LLM 从行业研报中提取涉及的公司和个股
+
+        Args:
+            content: 文本内容
+
+        Returns:
+            公司列表，失败返回空列表
+        """
+        prompt = """请从以下研报内容中提取所有涉及的公司和个股信息。
+
+要求：
+1. 提取公司名称和股票代码（如"腾讯控股 00700"）
+2. 如果没有涉及具体公司，返回空列表
+3. 只返回涉及的个股，不返回行业本身
+4. 直接返回 JSON，不要其他内容
+
+研报内容：
+{content}
+
+请按以下JSON格式返回：
+{{"companies": [{{"name": "公司名", "code": "股票代码"}}, ...]}}"""
+
+        full_prompt = prompt.format(content=content[:3000])
+
+        try:
+            import dashscope
+            from dashscope import Generation
+            dashscope.api_key = self.api_key
+
+            async with self.rate_limiter:
+                loop = asyncio.get_running_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: Generation.call(
+                        model=self.table_model,
+                        prompt=full_prompt,
+                        result_format='message',
+                        stream=False
+                    )
+                )
+
+                if response.status_code == 200:
+                    result_text = response.output.text if hasattr(response.output, 'text') else str(response.output)
+                    return self._parse_related_stocks(result_text)
+                else:
+                    _logger.warning(f"实体提取失败: {response.message}")
+                    return []
+
+        except ImportError:
+            return await self._extract_related_stocks_http(content)
+        except Exception as e:
+            _logger.error(f"实体提取异常: {e}")
+            return []
+
+    async def _extract_related_stocks_http(self, content: str) -> List[Dict[str, str]]:
+        """使用 HTTP 方式提取涉及公司"""
+        try:
+            import aiohttp
+            prompt = """请从以下研报内容中提取所有涉及的公司和个股信息。
+
+要求：
+1. 提取公司名称和股票代码
+2. 如果没有涉及具体公司，返回空列表
+
+研报内容：
+{content}
+
+请按以下JSON格式返回：
+{{"companies": [{{"name": "公司名", "code": "股票代码"}}, ...]}}"""
+
+            full_prompt = prompt.format(content=content[:3000])
+
+            headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+            payload = {
+                "model": self.table_model,
+                "input": {"prompt": full_prompt},
+                "parameters": {"stream": False}
+            }
+
+            async with self.rate_limiter:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(self.text_api_url, headers=headers, json=payload) as resp:
+                        if resp.status != 200:
+                            return []
+                        result = await resp.json()
+                        if 'output' in result and 'text' in result['output']:
+                            return self._parse_related_stocks(result['output']['text'])
+                        return []
+        except Exception as e:
+            _logger.error(f"HTTP 实体提取失败: {e}")
+            return []
+
+    def _parse_related_stocks(self, text: str) -> List[Dict[str, str]]:
+        """解析 LLM 返回的涉及公司文本"""
+        import json as json_module
+        try:
+            text = text.strip()
+            text = re.sub(r'^[^{]*', '', text)
+            text = re.sub(r'[^}]*$', '', text)
+            data = json_module.loads(text)
+            if 'companies' in data:
+                return data['companies']
+            return []
+        except Exception:
+            try:
+                name_pattern = r'"name"\s*:\s*"([^"]+)"'
+                code_pattern = r'"code"\s*:\s*"([^"]*)"'
+                names = re.findall(name_pattern, text)
+                codes = re.findall(code_pattern, text)
+                result = []
+                for i, name in enumerate(names):
+                    code = codes[i] if i < len(codes) else ""
+                    result.append({"name": name, "code": code})
+                return result
+            except Exception:
+                return []
 
     async def chunk_batch(self, report_type: str, report_ids: list[int]) -> list[dict]:
         """批量并行处理研报分块

@@ -8,6 +8,7 @@ from starlette.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.database import init_databases, close_databases
 from app.core.redis import redis_service
+from app.core.milvus import milvus_service
 from app.core import celery as core_celery
 
 _logger = logging.getLogger(__name__)
@@ -71,6 +72,11 @@ async def lifespan(app: FastAPI):
     await redis_service.init_redis()
     print("Redis连接初始化完成")
 
+    # 初始化 Milvus
+    await milvus_service.connect()
+    await milvus_service.create_collection_if_not_exists()
+    print("Milvus 连接初始化完成")
+
     # await register_all()  # 扫描并注册任务
     # await get_scheduler()  # 确保调度器启动
 
@@ -86,6 +92,10 @@ async def lifespan(app: FastAPI):
     # 关闭Redis连接
     await redis_service.close_redis()
     print("Redis连接已关闭")
+
+    # 关闭 Milvus 连接
+    await milvus_service.close()
+    print("Milvus 连接已关闭")
 
 
 def create_app() -> FastAPI:

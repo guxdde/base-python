@@ -138,6 +138,27 @@ class ResearchReport(BaseModel):
     text_analyze_model: str
     rate_limiter: int
 
+class MilvusConfig(BaseModel):
+    """Milvus配置"""
+    host: str
+    port: int
+    collection_name: str
+    timeout: int
+    collection_batch_size: int
+    max_message_size: int
+    flush_interval: int
+
+
+class EmbeddingServiceConfig(BaseModel):
+    """Embedding服务配置"""
+    url: str
+    api_endpoint: str
+    health_endpoint: str
+    model_name: str
+    dim: int
+    batch_size: int
+
+
 class Settings(BaseModel):
     """应用配置"""
 
@@ -168,6 +189,8 @@ class Settings(BaseModel):
     research_report: Optional[ResearchReport] = None
 
     report_db: Optional[DatabaseConfig] = None
+    milvus: Optional[MilvusConfig] = None
+    embedding_service: Optional[EmbeddingServiceConfig] = None
 
     @classmethod
     def from_yaml(cls, yaml_path: str = "config.yaml") -> "Settings":
@@ -255,6 +278,14 @@ class Settings(BaseModel):
         if "report_db" in config_data:
             report_db = config_data["report_db"]
             parsed_config["report_db"] = DatabaseConfig(**report_db)
+
+        if "milvus" in config_data:
+            milvus = config_data["milvus"]
+            parsed_config["milvus"] = MilvusConfig(**milvus)
+
+        if "embedding_service" in config_data:
+            embedding = config_data["embedding_service"]
+            parsed_config["embedding_service"] = EmbeddingServiceConfig(**embedding)
 
         return cls(**parsed_config)
 
