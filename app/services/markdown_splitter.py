@@ -63,15 +63,20 @@ class MarkdownReportSplitter:
             return []
 
     def split_text(self, markdown_text: str) -> list[Document]:
-        """分割 Markdown 文本"""
+        """分割 Markdown 文本，增强元数据"""
         if not markdown_text:
             return []
 
         try:
             header_chunks = self.header_splitter.split_text(markdown_text)
 
+            report_title = self._extract_report_title(header_chunks)
+
             result_chunks = []
             for chunk in header_chunks:
+                chunk.metadata["report_title"] = report_title
+                chunk.metadata["header_path"] = self._build_header_path(chunk.metadata)
+
                 if len(chunk.page_content) > self.chunk_size:
                     sub_chunks = self.recursive_splitter.split_text(chunk.page_content)
                     for sub_chunk in sub_chunks:
@@ -84,10 +89,28 @@ class MarkdownReportSplitter:
                 else:
                     result_chunks.append(chunk)
 
+            for i, chunk in enumerate(result_chunks):
+                chunk.metadata["chunk_index"] = i
+
             return result_chunks
         except Exception as e:
             _logger.error(f"分割文本失败: {e}")
             return []
+
+    def _extract_report_title(self, header_chunks: list[Document]) -> str:
+        """提取报告标题（一级标题）"""
+        for chunk in header_chunks:
+            if "#" in chunk.metadata and chunk.metadata["#"]:
+                return chunk.metadata["#"].strip()
+        return ""
+
+    def _build_header_path(self, metadata: dict) -> str:
+        """构建标题路径字符串"""
+        header_parts = []
+        for key in ["#", "##", "###"]:
+            if key in metadata and metadata[key]:
+                header_parts.append(metadata[key].strip())
+        return " > ".join(header_parts) if header_parts else ""
 
     def chunks_to_json(self, chunks: list[Document]) -> list[dict]:
         """将 Document 列表转换为 JSON 格式"""

@@ -73,16 +73,19 @@ class MilvusService:
 
         _logger.info(f"创建新 Collection: {collection_name}")
 
-        # 字段定义
+        # 字段定义 - 使用唯一主键 (chunk_uid) 实现唯一性和覆盖更新
+        # chunk_uid = f"{report_type}:{report_id}:{chunk_index}"
         fields = [
-            FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+            # 唯一主键: report_type:report_id:chunk_index
+            FieldSchema(name="chunk_uid", dtype=DataType.VARCHAR, max_length=64, is_primary=True),
+            # 原始字段（保留用于查询）
+            FieldSchema(name="report_type", dtype=DataType.VARCHAR, max_length=16),
+            FieldSchema(name="report_id", dtype=DataType.INT32),
             FieldSchema(name="chunk_index", dtype=DataType.INT32),
             # content 字段需要 enable_analyzer=true 才能使用 BM25 函数
             FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=4096, enable_analyzer=True),
-            FieldSchema(name="summary", dtype=DataType.VARCHAR, max_length=1024),
+            FieldSchema(name="summary", dtype=DataType.VARCHAR, max_length=1024, enable_analyzer=True),
             FieldSchema(name="source", dtype=DataType.VARCHAR, max_length=512),
-            FieldSchema(name="report_type", dtype=DataType.VARCHAR, max_length=16),
-            FieldSchema(name="report_id", dtype=DataType.INT32),
             FieldSchema(name="filename", dtype=DataType.VARCHAR, max_length=512),
             FieldSchema(name="trade_date", dtype=DataType.VARCHAR, max_length=16),
             FieldSchema(name="ts_code", dtype=DataType.VARCHAR, max_length=16),
@@ -91,15 +94,24 @@ class MilvusService:
             FieldSchema(name="org_name", dtype=DataType.VARCHAR, max_length=128),
             FieldSchema(name="headers", dtype=DataType.VARCHAR, max_length=1024),
             FieldSchema(name="related_stocks", dtype=DataType.VARCHAR, max_length=2048),
-            # 稠密向量 (embedding)
+            FieldSchema(name="report_summary", dtype=DataType.VARCHAR, max_length=2048),
+            FieldSchema(name="header_path", dtype=DataType.VARCHAR, max_length=1024),
+            # 稠密向量 (embedding for content)
             FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=self.vector_dim),
-            # 稀疏向量 (BM25 自动生成, 必须使用 SPARSE_FLOAT_VECTOR)
+            # 稀疏向量 (BM25 for content)
             FieldSchema(name="sparse_vector", dtype=DataType.SPARSE_FLOAT_VECTOR),
+            # 摘要向量 (embedding for summary)
+            FieldSchema(name="summary_embedding", dtype=DataType.FLOAT_VECTOR, dim=self.vector_dim),
+            # 摘要稀疏向量 (BM25 for summary)
+            FieldSchema(name="summary_sparse_vector", dtype=DataType.SPARSE_FLOAT_VECTOR),
         ]
 
-        schema = CollectionSchema(fields=fields, description="Research report chunks with BM25")
+        schema = CollectionSchema(
+            fields=fields,
+            description="Research report chunks with dual BM25 (content + summary), unique primary key (chunk_uid)"
+        )
 
-        # BM25 函数配置
+        # Content BM25 函数配置
         bm25_function = Function(
             name="text_bm25_emb",
             input_field_names=["content"],
@@ -107,7 +119,17 @@ class MilvusService:
             function_type=FunctionType.BM25,
         )
         schema.add_function(bm25_function)
-        _logger.info("BM25 函数已添加到 schema")
+        _logger.info("Content BM25 函数已添加到 schema")
+
+        # Summary BM25 函数配置
+        bm25_function_summary = Function(
+            name="summary_bm25_emb",
+            input_field_names=["summary"],
+            output_field_names=["summary_sparse_vector"],
+            function_type=FunctionType.BM25,
+        )
+        schema.add_function(bm25_function_summary)
+        _logger.info("Summary BM25 函数已添加到 schema")
 
         collection = Collection(name=collection_name, schema=schema)
         _logger.info("Collection 创建成功")
@@ -128,6 +150,14 @@ class MilvusService:
         }
         collection.create_index(field_name="sparse_vector", index_params=index_params_sparse)
         _logger.info("稀疏向量索引创建成功 (SPARSE_INVERTED_INDEX, BM25)")
+
+        # Summary 稠密向量索引 (IVF_FLAT)
+        collection.create_index(field_name="summary_embedding", index_params=index_params_dense)
+        _logger.info("Summary 稠密向量索引创建成功 (IVF_FLAT, L2)")
+
+        # Summary 稀疏向量索引 (SPARSE_INVERTED_INDEX)
+        collection.create_index(field_name="summary_sparse_vector", index_params=index_params_sparse)
+        _logger.info("Summary 稀疏向量索引创建成功 (SPARSE_INVERTED_INDEX, BM25)")
 
         # 字符串字段索引 (TRIE) - 提升查询性能
         string_fields = ["company_name", "ts_code", "industry_name", "org_name"]
@@ -191,13 +221,22 @@ class MilvusService:
                         return ""
                     return str(value)[:max_len]
 
+                report_type_val = safe_str(metadata.get("report_type", ""), 16)
+                report_id_val = metadata.get("report_id", 0) or 0
+                chunk_index_val = metadata.get("chunk_index", 0)
+                chunk_uid = f"{report_type_val}:{report_id_val}:{chunk_index_val}"
+
                 data.append({
-                    "chunk_index": metadata.get("chunk_index", 0),
+                    # 唯一主键: report_type:report_id:chunk_index
+                    "chunk_uid": chunk_uid,
+                    # 原始字段
+                    "report_type": report_type_val,
+                    "report_id": report_id_val,
+                    "chunk_index": chunk_index_val,
+                    # content 字段需要 enable_analyzer=true 才能使用 BM25 函数
                     "content": safe_str(chunk.get("content", ""), 4096),
-                    "summary": safe_str(metadata.get("summary", ""), 512),
+                    "summary": safe_str(metadata.get("summary", ""), 1024),
                     "source": safe_str(metadata.get("source", ""), 512),
-                    "report_type": safe_str(metadata.get("report_type", ""), 16),
-                    "report_id": metadata.get("report_id", 0) or 0,
                     "filename": safe_str(metadata.get("filename", ""), 512),
                     "trade_date": safe_str(metadata.get("trade_date", ""), 16),
                     "ts_code": safe_str(metadata.get("ts_code", ""), 16),
@@ -206,8 +245,11 @@ class MilvusService:
                     "org_name": safe_str(metadata.get("org_name", ""), 128),
                     "headers": json.dumps(metadata.get("headers", []) or [], ensure_ascii=False)[:1024],
                     "related_stocks": json.dumps(metadata.get("related_stocks", []) or [], ensure_ascii=False)[:2048],
+                    "report_summary": safe_str(metadata.get("report_summary", ""), 2048),
+                    "header_path": safe_str(metadata.get("header_path", ""), 1024),
                     "embedding": chunk.get("embedding", []) or [],
-                    # sparse_vector 会由 BM25 函数自动生成，不需要手动指定
+                    "summary_embedding": chunk.get("summary_embedding", []) or [],
+                    # sparse_vector 和 summary_sparse_vector 会由 BM25 函数自动生成
                 })
 
             _logger.info(f"准备插入数据, data 数量: {len(data)}")
@@ -222,6 +264,94 @@ class MilvusService:
             import traceback
             _logger.error(f"详细堆栈: {traceback.format_exc()}")
             return False
+
+    def delete_chunks_by_report_id(self, report_id: int, report_type: str = None) -> bool:
+        """删除指定研报的所有 chunks
+
+        Args:
+            report_id: 研报 ID
+            report_type: 研报类型，"stock" 或 "industry"
+
+        Returns:
+            是否删除成功
+        """
+        if not self._collection:
+            _logger.warning("Collection 未初始化，跳过删除")
+            return False
+
+        try:
+            delete_expr = f'report_id == {report_id} and report_type == "{report_type}"'
+            _logger.info(f"删除研报 {report_type}:{report_id} 的所有 chunks, 表达式: {delete_expr}")
+            self._collection.delete(delete_expr)
+            self._collection.flush()
+            _logger.info(f"成功删除研报 {report_type}:{report_id} 的所有 chunks")
+            return True
+        except Exception as e:
+            _logger.error(f"删除 chunks 失败: {e}")
+            return False
+
+    def delete_chunks_by_report_and_type(self, report_id: int, report_type: str) -> bool:
+        """删除指定研报的所有 chunks（按类型）
+
+        Args:
+            report_id: 研报 ID
+            report_type: 研报类型，"stock" 或 "industry"
+
+        Returns:
+            是否删除成功
+        """
+        return self.delete_chunks_by_report_id(report_id, report_type)
+
+    def query_chunks_by_report_id(self, report_id: int, report_type: str = None) -> List[Dict[str, Any]]:
+        """查询指定研报的所有 chunks
+
+        Args:
+            report_id: 研报 ID
+            report_type: 研报类型，"stock" 或 "industry"
+
+        Returns:
+            chunks 列表
+        """
+        if not self._collection:
+            _logger.warning("Collection 未初始化")
+            return []
+
+        try:
+            query_expr = f'report_id == {report_id} and report_type == "{report_type}"'
+            results = self._collection.query(
+                expr=query_expr,
+                output_fields=["*"]
+            )
+            _logger.info(f"查询到研报 {report_type}:{report_id} 的 {len(results)} 个 chunks")
+            return results
+        except Exception as e:
+            _logger.error(f"查询 chunks 失败: {e}")
+            return []
+
+    def get_chunk_count(self, report_id: int = None, report_type: str = None) -> int:
+        """获取 chunks 数量
+
+        Args:
+            report_id: 研报 ID，可选
+            report_type: 研报类型，可选
+
+        Returns:
+            chunks 数量
+        """
+        if not self._collection:
+            return 0
+
+        try:
+            if report_id is not None:
+                query_expr = f'report_id == {report_id} and report_type == "{report_type}"'
+                results = self._collection.query(expr=query_expr, output_fields=["count(*)"])
+                return results[0].get("count(*)", 0) if results else 0
+            else:
+                stats = self._collection.query(expr="", output_fields=["count(*)"])
+                return stats[0].get("count(*)", 0) if stats else 0
+        except Exception as e:
+            _logger.error(f"获取 chunk 数量失败: {e}")
+            return 0
 
 
 milvus_service = MilvusService()

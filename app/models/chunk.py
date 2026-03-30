@@ -13,7 +13,6 @@ class ProcessStatusEnum(str, Enum):
     integrated = "integrated"
     chunked = "chunked"
     chunked_to_db = "chunked_to_db"
-    done = "done"
     failed = "failed"
 
 

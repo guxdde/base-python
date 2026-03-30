@@ -57,12 +57,25 @@ async def insert_chunks_to_milvus(report_type: str, report_id: int) -> Dict[str,
             if not chunks:
                 return {"success": False, "message": "分块数据为空"}
 
-            contents = [chunk.get("content", "") for chunk in chunks]
+            delete_success = milvus_service.delete_chunks_by_report_id(report_id, report_type)
+            if delete_success:
+                _logger.info(f"删除旧数据成功，准备插入新数据")
+            else:
+                _logger.info(f"无旧数据需要删除或删除失败，继续插入")
+
             embedding_service = get_embedding_service()
-            embeddings = await embedding_service.get_embeddings(contents)
+
+            contents = [chunk.get("content", "") for chunk in chunks]
+            _logger.info(f"生成 content 向量，数量: {len(contents)}")
+            content_embeddings = await embedding_service.get_embeddings(contents)
+
+            summaries = [chunk.get("metadata", {}).get("summary", "") for chunk in chunks]
+            _logger.info(f"生成 summary 向量，数量: {len(summaries)}")
+            summary_embeddings = await embedding_service.get_embeddings(summaries)
 
             for i, chunk in enumerate(chunks):
-                chunk["embedding"] = embeddings[i] if i < len(embeddings) else []
+                chunk["embedding"] = content_embeddings[i] if i < len(content_embeddings) else []
+                chunk["summary_embedding"] = summary_embeddings[i] if i < len(summary_embeddings) else []
 
             insert_success = await milvus_service.insert_chunks(chunks)
 
@@ -72,11 +85,11 @@ async def insert_chunks_to_milvus(report_type: str, report_id: int) -> Dict[str,
             record.process_status = ProcessStatusEnum.chunked_to_db
             await db.commit()
 
-            _logger.info(f"研报 {report_type}:{report_id} 向量入库成功，共 {len(chunks)} 条")
+            _logger.info(f"研报 {report_type}:{report_id} 向量入库成功，共 {len(chunks)} 条 (content + summary)")
 
             return {
                 "success": True,
-                "message": "向量入库成功",
+                "message": "向量入库成功 (content + summary)",
                 "chunk_count": len(chunks),
             }
 
