@@ -1,52 +1,57 @@
+"""
+任务管理 API
+
+提供任务的查询、运行、状态查询等功能
+"""
+import dramatiq
 from fastapi import APIRouter
-from starlette.responses import JSONResponse
 
 from app.core.base_endpoint import BaseHTTPEndpoint
-from app.core.task_registry import task_registry
-from app.core import celery as core_celery
-from celery.result import AsyncResult
+from app.core.dramatiq_broker import get_broker
+from app.core.task_result import TaskResultStore
 
 router = APIRouter()
+
+
+def _get_actors():
+    """获取所有已注册的任务"""
+    broker = get_broker()
+    return broker.actors
 
 
 class TaskListEndpoint(BaseHTTPEndpoint):
     async def get(self, request):
         queue = request.query_params.get("queue")
         
-        if queue:
-            tasks = task_registry.get_by_queue(queue)
-        else:
-            tasks = task_registry.all()
+        actors = _get_actors()
+        tasks = []
         
-        task_list = [
-            {
-                "name": t.name,
-                "queue": t.queue,
-                "soft_time_limit": t.soft_time_limit,
-                "time_limit": t.time_limit,
-                "description": t.description,
-                "tags": t.tags,
-            }
-            for t in tasks
-        ]
-        return self.success_response({"items": task_list, "total": len(task_list)})
+        for name, actor in actors.items():
+            if queue is None or actor.queue_name == queue:
+                tasks.append({
+                    "name": name,
+                    "queue": actor.queue_name,
+                    "time_limit": actor.options.get("time_limit"),
+                    "max_retries": actor.options.get("max_retries"),
+                })
+        
+        return self.success_response({"items": tasks, "total": len(tasks)})
 
 
 class TaskDetailEndpoint(BaseHTTPEndpoint):
     async def get(self, request, task_name: str):
-        task = task_registry.get(task_name)
+        actors = _get_actors()
+        actor = actors.get(task_name)
         
-        if not task:
+        if not actor:
             return self.error_response(message=f"Task {task_name} not found")
         
         return self.success_response({
-            "name": task.name,
-            "queue": task.queue,
-            "soft_time_limit": task.soft_time_limit,
-            "time_limit": task.time_limit,
-            "description": task.description,
-            "tags": task.tags,
-            "options": task.options,
+            "name": task_name,
+            "queue": actor.queue_name,
+            "time_limit": actor.options.get("time_limit"),
+            "max_retries": actor.options.get("max_retries"),
+            "options": actor.options,
         })
 
 
@@ -59,30 +64,22 @@ class TaskRunEndpoint(BaseHTTPEndpoint):
         kwargs = data.get("kwargs", {})
         queue = data.get("queue")
         
-        task_info = task_registry.get(task_name)
-        if not task_info:
+        actors = _get_actors()
+        actor = actors.get(task_name)
+        
+        if not actor:
             return self.error_response(message=f"Task {task_name} not found")
         
         try:
-            celery_app = core_celery.get_celery_app()
+            task_queue = queue or actor.queue_name
             
-            send_kwargs = {}
-            if queue:
-                send_kwargs['queue'] = queue
-            elif task_info.queue:
-                send_kwargs['queue'] = task_info.queue
-            
-            result = celery_app.send_task(
-                task_name,
-                args=args,
-                kwargs=kwargs,
-                **send_kwargs
-            )
+            message = actor.send(*args, **kwargs)
             
             return self.success_response({
-                "task_id": result.id,
+                "task_id": message.message_id,
                 "task_name": task_name,
-                "status": "PENDING",
+                "queue": task_queue,
+                "status": "QUEUED",
             })
         except Exception as e:
             return self.error_response(message=f"Failed to run task: {str(e)}")
@@ -91,37 +88,31 @@ class TaskRunEndpoint(BaseHTTPEndpoint):
 class TaskStatusEndpoint(BaseHTTPEndpoint):
     async def get(self, request, task_id: str):
         try:
-            celery_app = core_celery.get_celery_app()
-            async_result = AsyncResult(task_id, app=celery_app)
+            result = TaskResultStore.get_result(task_id)
+            
+            if not result:
+                return self.success_response({
+                    "task_id": task_id,
+                    "status": "UNKNOWN",
+                    "message": "Task result not found in cache",
+                })
             
             return self.success_response({
                 "task_id": task_id,
-                "status": async_result.status,
-                "result": async_result.result if async_result.ready() else None,
-                "info": str(async_result.info) if async_result.info else None,
+                "status": result.get("status"),
+                "result": result.get("result"),
+                "error": result.get("error"),
+                "created_at": result.get("created_at"),
+                "updated_at": result.get("updated_at"),
             })
         except Exception as e:
             return self.error_response(message=f"Failed to get task status: {str(e)}")
 
 
-class TaskCancelEndpoint(BaseHTTPEndpoint):
-    async def post(self, request, task_id: str):
-        try:
-            celery_app = core_celery.get_celery_app()
-            async_result = AsyncResult(task_id, app=celery_app)
-            async_result.revoke(terminate=True)
-            
-            return self.success_response({
-                "task_id": task_id,
-                "status": "REVOKED",
-            })
-        except Exception as e:
-            return self.error_response(message=f"Failed to revoke task: {str(e)}")
-
-
 class TaskRegisteredEndpoint(BaseHTTPEndpoint):
     async def get(self, request):
-        task_names = task_registry.get_names()
+        actors = _get_actors()
+        task_names = list(actors.keys())
         return self.success_response({"items": task_names, "total": len(task_names)})
 
 
@@ -130,4 +121,3 @@ router.add_route("/register", TaskRegisteredEndpoint, methods=["GET"])
 router.add_route("/run", TaskRunEndpoint, methods=["POST"])
 router.add_route("/{task_name}", TaskDetailEndpoint, methods=["GET"])
 router.add_route("/status/{task_id}", TaskStatusEndpoint, methods=["GET"])
-router.add_route("/cancel/{task_id}", TaskCancelEndpoint, methods=["POST"])
