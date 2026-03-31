@@ -1,26 +1,25 @@
 """
-Celery 定时任务定义
+Dramatiq 定时任务定义
 
-此文件演示如何使用 BeatScheduler 定义定时任务。
+使用 @dramatiq.actor 装饰器定义任务，使用 periodic 参数定义定时任务
+使用 Periodiq 提供定时调度功能
 
-调度方式：
-- every(cron_str): Cron 表达式，如 "*/5 * * * *" 表示每5分钟
-- interval(): 固定间隔，支持 seconds/minutes/hours 参数
-- crontab(): 详细 Cron 参数
-- add(): 手动添加任务
+Cron 表达式格式: "分 时 日 月 周"
+示例:
+  - "*/10 * * * *"  每10分钟
+  - "0 9 * * *"     每天9点
+  - "0 */2 * * *"   每2小时
+  - "0 0 * * 1"     每周一零点
 """
 
+import dramatiq
+from periodiq import cron
 import logging
-from datetime import timedelta
-
-from app.core.beat import BeatScheduler
-from app.core.celery import celery_task
 
 _logger = logging.getLogger(__name__)
 
 
-@BeatScheduler.every("*/10 * * * *")  # 每10分钟执行
-@celery_task(queue="default", soft_time_limit=60, time_limit=120)
+@dramatiq.actor(periodic=cron("*/10 * * * *"), queue_name="default", time_limit=120000)
 def sync_market_data():
     """
     同步市场数据任务
@@ -32,8 +31,7 @@ def sync_market_data():
     return {"status": "success", "task": "sync_market_data"}
 
 
-@BeatScheduler.interval(hours=1)  # 每小时执行
-@celery_task(queue="default", soft_time_limit=300, time_limit=600)
+@dramatiq.actor(periodic=cron("0 */1 * * *"), queue_name="default", time_limit=600000)
 def generate_daily_report():
     """
     生成每日报告任务
@@ -45,8 +43,7 @@ def generate_daily_report():
     return {"status": "success", "task": "generate_daily_report"}
 
 
-@BeatScheduler.crontab(hour=9, minute=0)  # 每天9:00执行
-@celery_task(queue="default", soft_time_limit=600, time_limit=900)
+@dramatiq.actor(periodic=cron("0 9 * * *"), queue_name="default", time_limit=900000)
 def morning_notification():
     """
     早间通知任务
@@ -57,8 +54,7 @@ def morning_notification():
     return {"status": "success", "task": "morning_notification"}
 
 
-@BeatScheduler.crontab(hour=18, minute=0)  # 每天18:00执行
-@celery_task(queue="default", soft_time_limit=300, time_limit=600)
+@dramatiq.actor(periodic=cron("0 18 * * *"), queue_name="default", time_limit=600000)
 def evening_summary():
     """
     晚间汇总任务
@@ -69,8 +65,7 @@ def evening_summary():
     return {"status": "success", "task": "evening_summary"}
 
 
-@BeatScheduler.crontab(day_of_week="1", hour=0, minute=0)  # 每周一零点执行
-@celery_task(queue="default", soft_time_limit=1800, time_limit=3600)
+@dramatiq.actor(periodic=cron("0 0 * * 1"), queue_name="default", time_limit=3600000)
 def weekly_data_cleanup():
     """
     周数据清理任务
@@ -82,19 +77,11 @@ def weekly_data_cleanup():
     return {"status": "success", "task": "weekly_data_cleanup"}
 
 
-BeatScheduler.add(
-    task_name="backup_database",
-    task="app.tasks.scheduled_tasks.backup_database_task",
-    schedule="0 2 * * *",  # 每天凌晨2点
-    options={"queue": "default"},
-    description="数据库备份任务"
-)
-
-
-@celery_task(queue="default", soft_time_limit=600, time_limit=900)
-def backup_database_task():
+@dramatiq.actor(queue_name="default", time_limit=900000)
+def backup_database():
     """
-    数据库备份任务（被 BeatScheduler.add 调用）
+    数据库备份任务
+    每天凌晨2点执行
     """
     _logger.info("开始数据库备份")
     # TODO: 实现数据库备份逻辑
@@ -102,19 +89,11 @@ def backup_database_task():
     return {"status": "success", "task": "backup_database"}
 
 
-BeatScheduler.add(
-    task_name="sync_user_data",
-    task="app.tasks.scheduled_tasks.sync_user_data_task",
-    schedule=timedelta(minutes=30),  # 每30分钟
-    options={"queue": "default"},
-    description="用户数据同步"
-)
-
-
-@celery_task(queue="default", soft_time_limit=120, time_limit=180)
-def sync_user_data_task():
+@dramatiq.actor(periodic=cron("*/30 * * * *"), queue_name="default", time_limit=180000)
+def sync_user_data():
     """
-    用户数据同步任务（被 BeatScheduler.add 调用）
+    用户数据同步任务
+    每30分钟同步用户数据
     """
     _logger.info("开始同步用户数据")
     # TODO: 实现用户数据同步逻辑

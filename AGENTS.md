@@ -4,8 +4,8 @@
 
 ## 项目概览
 
-- **框架**: FastAPI (异步) + SQLAlchemy (异步 ORM) + Celery + Redis
-- **Python 版本**: 3.9+
+- **框架**: FastAPI (异步) + SQLAlchemy (异步 ORM) + Dramatiq + Periodiq + Redis
+- **Python 版本**: 3.10+
 - **配置**: 基于 YAML (`config.yaml`) + Pydantic 校验
 - **数据库**: MySQL/PostgreSQL (多数据库支持)
 - **测试**: pytest
@@ -20,13 +20,16 @@ python main.py
 uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-### Celery Workers
+### Dramatiq Workers
 ```bash
-# 启动 Celery worker
-celery -A app.core.celery._celery_app_instance worker --loglevel=info
+# 启动 Dramatiq worker (消费消息)
+dramatiq app.tasks --workers 4
 
-# 启动 Celery Beat (定时任务)
-celery -A app.core.celery._celery_app_instance beat --loglevel=info
+# 启动 Periodiq (定时任务调度器, 单独进程)
+periodiq -v app
+
+# 带代码热重载
+dramatiq app.tasks --watch .
 ```
 
 ### 运行测试
@@ -35,10 +38,10 @@ celery -A app.core.celery._celery_app_instance beat --loglevel=info
 pytest
 
 # 运行指定测试文件
-pytest tests/test_celery_integration.py
+pytest tests/test_dramatiq_integration.py
 
 # 运行单个测试
-pytest tests/test_celery_integration.py::test_celery_task_decorator_basic -v
+pytest tests/test_dramatiq_integration.py::test_dramatiq_actor_basic -v
 
 # 运行并生成覆盖率报告
 pytest --cov=app tests/
@@ -62,9 +65,9 @@ alembic upgrade head
 - 使用 FastAPI 的 `Depends` 进行 **依赖注入**
 
 ### 命名规范
-- **文件**: snake_case (如 `task_registry.py`, `market_base_service.py`)
+- **文件**: snake_case (如 `dramatiq_broker.py`, `market_base_service.py`)
 - **类**: PascalCase (如 `DatabaseManager`, `MarketBaseService`)
-- **函数/变量**: snake_case (如 `get_session`, `celery_app`)
+- **函数/变量**: snake_case (如 `get_session`, `broker`)
 - **常量**: UPPER_SNAKE_CASE (如 `DEFAULT_TIMEOUT`)
 - **数据库表**: snake_case 加下划线
 
@@ -133,58 +136,58 @@ class Tenant(Base):
     status = Column(Enum(TenantStatusEnum), default=TenantStatusEnum.active)
 ```
 
-### Celery 任务
-- 使用 `app.core.celery` 的 `@celery_task` 装饰器
-- 通过装饰器参数定义队列、超时时间、重试策略
+### Dramatiq 任务
+使用 `@dramatiq.actor` 装饰器定义任务：
 
 ```python
-from app.core.celery import celery_task
+import dramatiq
 
-@celery_task(queue='default', soft_time_limit=30, time_limit=60)
+@dramatiq.actor(queue_name='default', time_limit=60000, max_retries=3)
 def process_task(data: dict) -> dict:
-    """处理任务并设置超时限制"""
+    """处理任务并设置超时限制 (毫秒)"""
     return {"result": "success"}
 ```
 
-### Celery 定时任务
-定时任务定义在 `app/tasks/scheduled_tasks.py`，使用 `BeatScheduler` 装饰器注册：
-
+调用任务：
 ```python
-from app.core.beat import BeatScheduler
-from app.core.celery import celery_task
+# 异步调用
+result = process_task.send(data)
 
-# 方式1: Cron 表达式
-@BeatScheduler.every("*/5 * * * *")  # 每5分钟
-@celery_task()
-def sync_data():
-    pass
-
-# 方式2: 固定间隔
-@BeatScheduler.interval(hours=1)  # 每小时
-@celery_task()
-def cleanup():
-    pass
-
-# 方式3: 详细 Cron 参数
-@BeatScheduler.crontab(hour=9, minute=0)  # 每天9:00
-@celery_task()
-def daily_task():
-    pass
-
-# 方式4: 手动添加
-BeatScheduler.add(
-    task_name="weekly_task",
-    task="app.tasks.scheduled_tasks.weekly_task_func",
-    schedule="0 0 * * 1",  # 每周一
-)
+# 延迟调用 (毫秒)
+result = process_task.send_with_options(args=(data,), delay=60000)
 ```
 
-| 装饰器 | 参数 | 说明 |
-|--------|------|------|
-| `every()` | cron 字符串 | `"*/10 * * * *"` 每10分钟 |
-| `interval()` | seconds/minutes/hours | `hours=2` 每2小时 |
-| `crontab()` | minute/hour/day_of_month/month/day_of_week | 精确 Cron 参数 |
-| `add()` | task_name/task/schedule | 手动注册 |
+### Dramatiq 定时任务
+使用 `periodic` 参数结合 Periodiq 的 `cron` 函数：
+
+```python
+import dramatiq
+from periodiq import cron
+
+# Cron 表达式: "分 时 日 月 周"
+@dramatiq.actor(periodic=cron("*/10 * * * *"), queue_name="default")
+def sync_data():
+    """每10分钟执行"""
+    pass
+
+@dramatiq.actor(periodic=cron("0 9 * * *"), queue_name="default")
+def daily_task():
+    """每天9点执行"""
+    pass
+
+@dramatiq.actor(periodic=cron("0 */2 * * *"), queue_name="default")
+def hourly_task():
+    """每2小时执行"""
+    pass
+```
+
+| Cron 表达式 | 说明 |
+|-------------|------|
+| `*/10 * * * *` | 每10分钟 |
+| `0 * * * *` | 每小时整点 |
+| `0 9 * * *` | 每天9点 |
+| `0 */2 * * *` | 每2小时 |
+| `0 0 * * 1` | 每周一零点 |
 
 ### API 端点
 - 继承 `BaseHTTPEndpoint` 以保持响应格式一致
@@ -207,6 +210,7 @@ from app.core.config import settings
 
 db_url = settings.default_db.url
 redis_url = settings.redis.url
+rabbitmq_conf = settings.rabbitmq
 ```
 
 ### 日志
@@ -226,11 +230,13 @@ base-python/
 │   │   ├── __init__.py
 │   │   └── scheduled_tasks.py # 定时任务示例
 │   ├── core/                 # 核心组件
-│   │   ├── celery.py         # Celery 配置
+│   │   ├── dramatiq_broker.py # Dramatiq Broker 配置
+│   │   ├── dramatiq_tasks.py  # 任务装饰器
+│   │   ├── task_result.py     # 任务结果存储 (Redis)
 │   │   ├── config.py         # 配置模型
 │   │   ├── database.py       # 数据库管理
 │   │   ├── redis.py          # Redis 客户端
-│   │   ├── beat.py           # Celery Beat 调度器
+│   │   ├── dead_letter.py    # 死信管理
 │   │   └── base_endpoint.py  # 基础 HTTP 端点
 │   ├── models/               # SQLAlchemy 模型
 │   ├── api/                  # API 端点
@@ -263,12 +269,19 @@ redis = get_redis_sync()
 value = redis.get(key)
 ```
 
-### 调用 Celery 任务
+### 调用 Dramatiq 任务
 ```python
-from app.factory import get_celery_app
+from app.core.dramatiq_broker import get_broker
 
-celery_app = get_celery_app()
-result = celery_app.send_task("task_name", args=[1, 2], kwargs={})
+broker = get_broker()
+actors = broker.actors
+actor = actors.get("task_name")
+
+# 发送任务
+message = actor.send(data)
+
+# 延迟发送
+message = actor.send_with_options(args=(data,), delay=60000)
 ```
 
 ## AI Agent 注意事项
@@ -278,3 +291,5 @@ result = celery_app.send_task("task_name", args=[1, 2], kwargs={})
 - 配置通过 `config.yaml` 管理环境差异
 - config.yaml 中的敏感信息不应提交 (本地开发使用 `.env`)
 - 新增端点请遵循 `app/api/` 中的现有模式
+- Dramatiq 任务必须使用 JSON 可序列化的参数
+- 时间限制以毫秒为单位 (如 `time_limit=60000` = 60秒)

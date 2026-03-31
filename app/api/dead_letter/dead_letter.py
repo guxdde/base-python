@@ -1,12 +1,15 @@
-from fastapi import APIRouter, Depends, Query
+"""
+Dead Letter API
+
+提供失败任务的查看、重试、解决等功能
+"""
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional, List
-import asyncio
 
 from app.core.base_endpoint import BaseHTTPEndpoint
 from app.core.database import dbm
 from app.core.dead_letter import DeadLetterManager
-from app.core import celery as core_celery
+from app.core.dramatiq_broker import get_broker
 
 router = APIRouter()
 
@@ -66,22 +69,34 @@ class DeadLetterRetryEndpoint(BaseHTTPEndpoint):
         queue = data.get("queue")
         
         manager = DeadLetterManager(db)
+        record = await manager.get_by_id(record_id)
         
-        celery_app = None
+        if not record:
+            return self.error_response(message="Dead letter record not found")
+        
         try:
-            celery_app = core_celery.get_celery_app()
-        except Exception:
-            pass
-        
-        new_task_id = await manager.retry(record_id, celery_app=celery_app, queue=queue)
-        
-        if new_task_id:
+            broker = get_broker()
+            actors = broker.actors
+            actor = actors.get(record.task_name)
+            
+            if not actor:
+                return self.error_response(message=f"Task {record.task_name} not found")
+            
+            task_queue = queue or record.queue or "default"
+            message = actor.send(*record.args, **record.kwargs)
+            
+            record.status = "retrying"
+            record.retry_count += 1
+            from datetime import datetime
+            record.last_retry_at = datetime.utcnow()
+            await db.commit()
+            
             return self.success_response({
                 "message": "Task retried successfully",
-                "new_task_id": new_task_id
+                "new_task_id": message.message_id
             })
-        else:
-            return self.error_response(message="Failed to retry task")
+        except Exception as e:
+            return self.error_response(message=f"Failed to retry task: {str(e)}")
 
 
 class DeadLetterResolveEndpoint(BaseHTTPEndpoint):
