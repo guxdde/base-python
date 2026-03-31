@@ -31,6 +31,7 @@ class IndustryResearchReportRecord(Base, IntBaseModel):
     process_end = Column(DateTime(timezone=True), nullable=True, comment="结束处理时间")
     process_status = Column(SQLEnum(ProcessStatusEnum), default=ProcessStatusEnum.no, index=True, comment="处理状态")
     output_path = Column(String(500), nullable=True, comment="文件路径")
+    report_summary = Column(Text, nullable=True, comment="整篇研报摘要")
 
 class StockResearchReportRecord(Base, IntBaseModel):
     __tablename__ = "stock_research_report_record"
@@ -49,6 +50,7 @@ class StockResearchReportRecord(Base, IntBaseModel):
     process_end = Column(DateTime(timezone=True), nullable=True, comment="结束处理时间")
     process_status = Column(SQLEnum(ProcessStatusEnum), default=ProcessStatusEnum.no, index=True, comment="处理状态")
     output_path = Column(String(500), nullable=True, comment="文件路径")
+    report_summary = Column(Text, nullable=True, comment="整篇研报摘要")
 
 
 

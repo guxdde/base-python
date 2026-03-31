@@ -179,12 +179,27 @@ class PDFService:
                         if not chunks:
                             return {"report_id": report_id, "success": False, "message": "分块结果为空"}
 
+                        report_summary = await pdf_utils.generate_report_summary(
+                            " ".join([chunk.page_content for chunk in chunks])
+                        )
+                        _logger.info(f"[PDFService] report_summary长度: {len(report_summary)}, report_id: {report_id}")
+
                         async def process_chunk_with_metadata(chunk, index):
                             async with semaphore:
                                 chunk.metadata.update(base_metadata)
                                 chunk.metadata["chunk_index"] = index
-                                summary = await pdf_utils.generate_summary(chunk.page_content)
-                                chunk.metadata["summary"] = summary
+                                chunk.metadata["report_summary"] = report_summary
+
+                                _logger.info(f"[PDFService] 开始生成chunk {index} 的摘要")
+                                contextual_summary = await pdf_utils.generate_contextual_summary(
+                                    chunk_content=chunk.page_content,
+                                    report_summary=report_summary,
+                                    header_path=chunk.metadata.get("header_path", ""),
+                                    report_title=record.title if hasattr(record, 'title') else "",
+                                    chunk_index=index
+                                )
+                                _logger.info(f"[PDFService] chunk {index} 摘要长度: {len(contextual_summary)}")
+                                chunk.metadata["summary"] = contextual_summary
 
                                 if report_type == "industry":
                                     related_stocks = await pdf_utils.extract_related_stocks(chunk.page_content)

@@ -290,6 +290,10 @@ class MarkdownChunkingStep(PipelineStep):
             report_summary = await pdf_utils.generate_report_summary(full_markdown_content)
             logger.info(f"报告摘要生成完成: {report_summary[:100]}...")
 
+            record.report_summary = report_summary
+            await context["db"].commit()
+            logger.info(f"报告摘要已保存到数据库")
+
             import asyncio
             semaphore = asyncio.Semaphore(10)
 

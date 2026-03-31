@@ -84,7 +84,7 @@ class MilvusService:
             FieldSchema(name="chunk_index", dtype=DataType.INT32),
             # content 字段需要 enable_analyzer=true 才能使用 BM25 函数
             FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=4096, enable_analyzer=True),
-            FieldSchema(name="summary", dtype=DataType.VARCHAR, max_length=1024, enable_analyzer=True),
+            FieldSchema(name="summary", dtype=DataType.VARCHAR, max_length=2048, enable_analyzer=True),
             FieldSchema(name="source", dtype=DataType.VARCHAR, max_length=512),
             FieldSchema(name="filename", dtype=DataType.VARCHAR, max_length=512),
             FieldSchema(name="trade_date", dtype=DataType.VARCHAR, max_length=16),
@@ -94,7 +94,6 @@ class MilvusService:
             FieldSchema(name="org_name", dtype=DataType.VARCHAR, max_length=128),
             FieldSchema(name="headers", dtype=DataType.VARCHAR, max_length=1024),
             FieldSchema(name="related_stocks", dtype=DataType.VARCHAR, max_length=2048),
-            FieldSchema(name="report_summary", dtype=DataType.VARCHAR, max_length=2048),
             FieldSchema(name="header_path", dtype=DataType.VARCHAR, max_length=1024),
             # 稠密向量 (embedding for content)
             FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=self.vector_dim),
@@ -235,7 +234,7 @@ class MilvusService:
                     "chunk_index": chunk_index_val,
                     # content 字段需要 enable_analyzer=true 才能使用 BM25 函数
                     "content": safe_str(chunk.get("content", ""), 4096),
-                    "summary": safe_str(metadata.get("summary", ""), 1024),
+                    "summary": safe_str(metadata.get("summary", ""), 2048),
                     "source": safe_str(metadata.get("source", ""), 512),
                     "filename": safe_str(metadata.get("filename", ""), 512),
                     "trade_date": safe_str(metadata.get("trade_date", ""), 16),
@@ -245,7 +244,6 @@ class MilvusService:
                     "org_name": safe_str(metadata.get("org_name", ""), 128),
                     "headers": json.dumps(metadata.get("headers", []) or [], ensure_ascii=False)[:1024],
                     "related_stocks": json.dumps(metadata.get("related_stocks", []) or [], ensure_ascii=False)[:2048],
-                    "report_summary": safe_str(metadata.get("report_summary", ""), 2048),
                     "header_path": safe_str(metadata.get("header_path", ""), 1024),
                     "embedding": chunk.get("embedding", []) or [],
                     "summary_embedding": chunk.get("summary_embedding", []) or [],

@@ -5,6 +5,7 @@ import base64
 import logging
 from typing import Dict, Optional, Any, List
 from aiolimiter import AsyncLimiter
+import aiohttp
 
 from app.core.config import settings
 
@@ -290,13 +291,13 @@ async def _analyze_html_http(html_content: str, prompt: str) -> Dict[str, str]:
 
 
 async def generate_summary(content: str) -> str:
-    prompt = """请为以下研报内容生成100-200字的摘要。
+    prompt = """请为以下研报内容生成400-500字的摘要。
 
 要求：
 1. 概括核心观点和数据
 2. 保持客观中立
 3. 不要添加解释性文字
-4. 摘要内容不超过200字
+4. 摘要内容不超过500字
 5. 直接返回摘要文字，不要其他格式
 
 研报内容：
@@ -324,8 +325,8 @@ async def generate_summary(content: str) -> str:
             if response.status_code == 200:
                 summary = response.output.text if hasattr(response.output, 'text') else str(response.output)
                 summary = summary.strip()
-                if len(summary) > 200:
-                    summary = summary[:197] + "..."
+                # if len(summary) > 200:
+                #     summary = summary[:197] + "..."
                 if len(summary) > 500:
                     summary = summary[:500]
                 return summary
@@ -455,7 +456,7 @@ async def generate_contextual_summary(
         chunk_index: 当前段落在报告中的索引位置
 
     Returns:
-        上下文增强摘要字符串 (50-100字)
+        上下文增强摘要字符串 (400-500字)
     """
     prompt = """这是一篇关于「{report_title}」的研报分析。
 
@@ -468,74 +469,8 @@ async def generate_contextual_summary(
 【当前段落内容】
 {chunk_content}
 
-请用 50-100 字概括这段内容在整篇报告中的核心贡献，直接返回摘要，不要其他格式。"""
-
-    full_prompt = prompt.format(
-        report_title=report_title or "该主题",
-        report_summary=report_summary or "暂无报告摘要",
-        header_path=header_path or "未知位置",
-        chunk_index=chunk_index + 1,
-        chunk_content=chunk_content[:1500]
-    )
-
+请用 300-400 字概括这段内容在整篇报告中的核心贡献，直接返回摘要，不要其他格式。"""
     try:
-        import dashscope
-        from dashscope import Generation
-        dashscope.api_key = _api_key
-
-        async with _rate_limiter:
-            loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: Generation.call(
-                    model=_table_model,
-                    prompt=full_prompt,
-                    result_format='message',
-                    stream=False
-                )
-            )
-
-            if response.status_code == 200:
-                summary = response.output.text if hasattr(response.output, 'text') else str(response.output)
-                summary = summary.strip()
-                if len(summary) > 100:
-                    summary = summary[:97] + "..."
-                return summary
-            else:
-                _logger.warning(f"上下文摘要生成失败: {response.message}")
-                return ""
-
-    except ImportError:
-        return await _generate_contextual_summary_http(
-            chunk_content, report_summary, header_path, report_title, chunk_index
-        )
-    except Exception as e:
-        _logger.error(f"上下文摘要生成异常: {e}")
-        return ""
-
-
-async def _generate_contextual_summary_http(
-    chunk_content: str,
-    report_summary: str,
-    header_path: str,
-    report_title: str,
-    chunk_index: int
-) -> str:
-    try:
-        import aiohttp
-        prompt = """这是一篇关于「{report_title}」的研报分析。
-
-【整篇报告摘要】
-{report_summary}
-
-【当前段落位置】
-{header_path}（第 {chunk_index} 个段落）
-
-【当前段落内容】
-{chunk_content}
-
-请用 50-100 字概括这段内容在整篇报告中的核心贡献，直接返回摘要，不要其他格式。"""
-
         full_prompt = prompt.format(
             report_title=report_title or "该主题",
             report_summary=report_summary or "暂无报告摘要",
@@ -555,13 +490,17 @@ async def _generate_contextual_summary_http(
             async with aiohttp.ClientSession() as session:
                 async with session.post(_text_api_url, headers=headers, json=payload) as resp:
                     if resp.status != 200:
+                        _logger.error(f"HTTP 上下文摘要生成失败, status: {resp.status}")
                         return ""
                     result = await resp.json()
                     if 'output' in result and 'text' in result['output']:
                         summary = result['output']['text'].strip()
-                        if len(summary) > 100:
-                            summary = summary[:97] + "..."
+                        _logger.info(f"[HTTP]上下文摘要原始长度: {len(summary)}, chunk_index: {chunk_index}")
+                        if len(summary) > 500:
+                            summary = summary[:497] + "..."
+                        _logger.info(f"[HTTP]上下文摘要截断后长度: {len(summary)}, chunk_index: {chunk_index}")
                         return summary
+                    _logger.warning(f"HTTP 上下文摘要返回格式错误: {result}")
                     return ""
     except Exception as e:
         _logger.error(f"HTTP 上下文摘要生成失败: {e}")
@@ -577,7 +516,7 @@ async def _generate_summary_http(content: str) -> str:
 1. 概括核心观点和数据
 2. 保持客观中立
 3. 直接返回摘要文字
-4. 摘要内容不超过200字
+4. 摘要内容不超过300字
 
 内容：
 {content}
@@ -600,8 +539,6 @@ async def _generate_summary_http(content: str) -> str:
                     result = await resp.json()
                     if 'output' in result and 'text' in result['output']:
                         summary = result['output']['text'].strip()
-                        if len(summary) > 200:
-                            summary = summary[:197] + "..."
                         if len(summary) > 500:
                             summary = summary[:500]
                         return summary
