@@ -6,7 +6,8 @@ import logging
 from app.core.config import settings
 from app.core.database import init_databases, close_databases
 from app.core.redis import redis_service
-from app.core.dramatiq_broker import initialize as init_dramatiq
+# from app.core import dramatiq_broker
+# from app.tasks.scheduled_tasks import *
 
 _logger = logging.getLogger(__name__)
 
@@ -22,8 +23,8 @@ async def lifespan(app: FastAPI):
     await redis_service.init_redis()
     print("Redis连接初始化完成")
 
-    init_dramatiq()
-    print("Dramatiq Broker 初始化完成")
+    # init_dramatiq()
+    # print("Dramatiq Broker 初始化完成")
     
     yield
 

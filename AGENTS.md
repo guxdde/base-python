@@ -23,13 +23,34 @@ uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 ### Dramatiq Workers
 ```bash
 # 启动 Dramatiq worker (消费消息)
-dramatiq app.tasks --workers 4
+dramatiq app.tasks --processes 4
 
 # 启动 Periodiq (定时任务调度器, 单独进程)
 periodiq -v app
 
 # 带代码热重载
 dramatiq app.tasks --watch .
+```
+
+### 纯异步任务
+Dramatiq 支持纯异步任务，使用 `AsyncIO` 中间件：
+
+```python
+import dramatiq
+import httpx
+from dramatiq.middleware import AsyncIO
+
+# Broker 配置
+broker = RabbitmqBroker(url="amqp://guest:guest@localhost:5672")
+broker.add_middleware(AsyncIO())  # 开启异步支持
+dramatiq.set_broker(broker)
+
+# 异步任务
+@dramatiq.actor
+async def async_task(prompt: str):
+    async with httpx.AsyncClient() as client:
+        response = await client.post("https://api.example.com/chat", json={"prompt": prompt})
+        return response.json()
 ```
 
 ### 运行测试
@@ -146,6 +167,14 @@ import dramatiq
 def process_task(data: dict) -> dict:
     """处理任务并设置超时限制 (毫秒)"""
     return {"result": "success"}
+
+# 纯异步任务（推荐）
+@dramatiq.actor(queue_name='default', time_limit=60000, max_retries=3)
+async def async_task(data: dict) -> dict:
+    """纯异步任务，不会阻塞 Worker"""
+    async with httpx.AsyncClient() as client:
+        response = await client.get("https://api.example.com/data")
+        return response.json()
 ```
 
 调用任务：
