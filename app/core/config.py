@@ -158,6 +158,24 @@ class EmbeddingServiceConfig(BaseModel):
     dim: int
     batch_size: int
 
+class RerankServiceConfig(BaseModel):
+    """Rerank服务配置"""
+    url: str
+    api_endpoint: str
+    health_endpoint: str
+    model_name: str
+    max_doc_length: int
+    batch_size: int
+
+class LLMConfig(BaseModel):
+    """LLM服务配置"""
+    api_url: str
+    api_key: str
+    model: str
+    max_tokens: int
+    temperature: int
+    timeout: int
+
 
 class Settings(BaseModel):
     """应用配置"""
@@ -191,6 +209,7 @@ class Settings(BaseModel):
     report_db: Optional[DatabaseConfig] = None
     milvus: Optional[MilvusConfig] = None
     embedding_service: Optional[EmbeddingServiceConfig] = None
+    rerank_service: Optional[RerankServiceConfig] = None
 
     @classmethod
     def from_yaml(cls, yaml_path: str = "config.yaml") -> "Settings":
@@ -286,6 +305,10 @@ class Settings(BaseModel):
         if "embedding_service" in config_data:
             embedding = config_data["embedding_service"]
             parsed_config["embedding_service"] = EmbeddingServiceConfig(**embedding)
+
+        if "rerank_service" in config_data:
+            rerank = config_data["rerank_service"]
+            parsed_config["rerank_service"] = RerankServiceConfig(**rerank)
 
         return cls(**parsed_config)
 

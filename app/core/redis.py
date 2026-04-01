@@ -149,6 +149,11 @@ class RedisService:
         result = await self._execute_with_retry(self.redis.set, key, value, ex=expire, nx=nx, xx=xx)
         return result is not None and result
 
+    async def setex(self, key: str,  expire: int, value: str) -> bool:
+        """设置缓存值并指定过期时间"""
+        result = await self._execute_with_retry(self.redis.setex, key, expire, value)
+        return result is not None and result
+
     async def delete(self, key: str) -> bool:
         """删除缓存值"""
         result = await self._execute_with_retry(self.redis.delete, key)

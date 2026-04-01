@@ -7,7 +7,7 @@ import dramatiq
 from fastapi import APIRouter
 
 from app.core.base_endpoint import BaseHTTPEndpoint
-from app.core.dramatiq_broker import get_broker
+from app.core.dramatiq_broker import rabbitmq_broker
 from app.core.task_result import TaskResultStore
 
 router = APIRouter()
@@ -15,7 +15,7 @@ router = APIRouter()
 
 def _get_actors():
     """获取所有已注册的任务"""
-    broker = get_broker()
+    broker = rabbitmq_broker
     return broker.actors
 
 
