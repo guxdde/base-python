@@ -7,7 +7,6 @@ from app.core.config import settings
 from app.core.database import init_databases, close_databases
 from app.core.redis import redis_service
 from app.core.milvus import milvus_service
-from app.core.dramatiq_broker import initialize as init_dramatiq
 
 _logger = logging.getLogger(__name__)
 
@@ -28,12 +27,9 @@ async def lifespan(app: FastAPI):
     await milvus_service.create_collection_if_not_exists()
     print("Milvus 连接初始化完成")
 
-    # await register_all()  # 扫描并注册任务
-    # await get_scheduler()  # 确保调度器启动
+    # init_dramatiq()
+    # print("Dramatiq Broker 初始化完成")
 
-    init_dramatiq()
-    print("Dramatiq Broker 初始化完成")
-    
     yield
 
     print("应用关闭中...")

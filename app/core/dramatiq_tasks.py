@@ -4,8 +4,7 @@
 为 Dramatiq actor 提供额外的配置选项
 """
 import dramatiq
-from typing import Callable, Optional
-from functools import wraps
+from typing import Callable
 
 from app.core.dramatiq_broker import get_broker
 from app.core.task_result import TaskResultStore
@@ -26,22 +25,16 @@ def dramatiq_task(
     
     用法:
         @dramatiq_task(queue="default", time_limit=60000)
-        def my_task(data):
-            return process(data)
+        async def my_task(data):
+            return await process(data)
     """
     def decorator(fn: Callable):
-        @dramatiq.actor(
+        return dramatiq.actor(
             fn,
             queue_name=queue,
             time_limit=time_limit,
             max_retries=max_retries,
         )
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
-        
-        return wrapper
-    
     return decorator
 
 
