@@ -26,9 +26,6 @@ DEFAULT_LAMBDA_MONTHLY = 0.01
 
 WEIGHT_STOCK_EXACT_MATCH = 1.3
 WEIGHT_INDUSTRY_RELATED_STOCK = 1.2
-WEIGHT_CONTENT = 0.4
-WEIGHT_SUMMARY = 0.4
-WEIGHT_BM25 = 0.2
 
 
 class RetrievalService:
@@ -37,6 +34,44 @@ class RetrievalService:
         self.embedding = get_embedding_service()
         self.rerank = get_rerank_service()
         self._redis = None
+        
+        self._init_config()
+    
+    def _init_config(self):
+        retrieval_config = settings.retrieval if settings.retrieval else None
+        
+        if retrieval_config:
+            self.weights = retrieval_config.weights
+            self.threshold_enabled = retrieval_config.threshold.enabled
+            self.vector_threshold = retrieval_config.threshold.vector
+            self.bm25_threshold = retrieval_config.threshold.bm25
+            self.fusion_threshold = retrieval_config.threshold.fusion
+            self.cross_validation_enabled = retrieval_config.threshold.cross_validation
+            self.min_vector_ratio = retrieval_config.threshold.min_vector_ratio
+            self.min_bm25_ratio = retrieval_config.threshold.min_bm25_ratio
+            self.boost_when_both_high = retrieval_config.threshold.boost_when_both_high
+            self.log_enabled = retrieval_config.threshold.log_enabled
+            self.log_filtered = retrieval_config.threshold.log_filtered
+            self.log_level = retrieval_config.threshold.log_level
+            self.min_results = retrieval_config.threshold.min_results
+        else:
+            self.weights = {"summary_embedding": 0.4, "content_bm25": 0.3, "summary_bm25": 0.3}
+            self.threshold_enabled = True
+            self.vector_threshold = type("obj", (object,), {"method": "relative", "ratio": 0.3})()
+            self.bm25_threshold = type("obj", (object,), {"method": "relative", "ratio": 0.3})()
+            self.fusion_threshold = type("obj", (object,), {"method": "relative", "ratio": 0.2})()
+            self.cross_validation_enabled = True
+            self.min_vector_ratio = 0.1
+            self.min_bm25_ratio = 0.05
+            self.boost_when_both_high = 1.2
+            self.log_enabled = True
+            self.log_filtered = True
+            self.log_level = "info"
+            self.min_results = 3
+        
+        self.WEIGHT_SUMMARY_EMBEDDING = self.weights.get("summary_embedding", 0.4)
+        self.WEIGHT_CONTENT_BM25 = self.weights.get("content_bm25", 0.3)
+        self.WEIGHT_SUMMARY_BM25 = self.weights.get("summary_bm25", 0.3)
     
     @property
     def redis(self):
@@ -46,7 +81,6 @@ class RetrievalService:
         return self._redis
     
     def _generate_cache_key(self, request: RetrievalRequest, intent_data: Dict) -> str:
-        """生成缓存 key"""
         cache_str = f"{request.query}:{request.top_k}:{request.report_type or 'all'}"
         cache_str += f":{request.ts_code or ''}:{request.industry_name or ''}"
         cache_str += f":{request.trade_date_from or ''}:{request.trade_date_to or ''}"
@@ -56,7 +90,6 @@ class RetrievalService:
         return f"retrieval:{hash_key}"
     
     async def _get_from_cache(self, cache_key: str) -> Optional[Dict]:
-        """从缓存获取"""
         try:
             if self.redis:
                 cached = await self.redis.get(cache_key)
@@ -70,7 +103,6 @@ class RetrievalService:
         return None
     
     async def _save_to_cache(self, cache_key: str, data: Dict, ttl: int = CACHE_TTL):
-        """保存到缓存"""
         try:
             if self.redis:
                 await self.redis.setex(cache_key, ttl, json.dumps(data, ensure_ascii=False))
@@ -79,7 +111,6 @@ class RetrievalService:
             logger.warning(f"缓存保存失败: {e}")
     
     def _build_stock_filter_expr(self, request: RetrievalRequest, intent_data: Dict) -> str:
-        """构建 Stock 研报的过滤表达式"""
         conditions = []
         conditions.append('report_type == "stock"')
         
@@ -101,7 +132,6 @@ class RetrievalService:
         return expr
     
     def _build_industry_filter_expr(self, request: RetrievalRequest, intent_data: Dict) -> str:
-        """构建 Industry 研报的过滤表达式"""
         conditions = []
         conditions.append('report_type == "industry"')
         
@@ -129,7 +159,6 @@ class RetrievalService:
         return expr
     
     def _build_single_type_filter(self, request: RetrievalRequest, intent_data: Dict, report_type: str) -> str:
-        """为单类型构建过滤表达式"""
         if report_type == "stock":
             return self._build_stock_filter_expr(request, intent_data)
         else:
@@ -142,14 +171,13 @@ class RetrievalService:
         top_k: int, 
         filter_expr: str
     ) -> List[Dict[str, Any]]:
-        """单路向量检索"""
         try:
             search_params = {
                 "metric_type": "L2",
                 "params": {"nprobe": 10}
             }
             
-            logger.info(f"执行检索: field={field}, top_k={top_k}, filter={filter_expr[:100]}...")
+            logger.info(f"执行向量检索: field={field}, top_k={top_k}, filter={filter_expr[:100]}...")
             
             results = self.milvus._collection.search(
                 data=[query_vector],
@@ -162,17 +190,48 @@ class RetrievalService:
             
             if results and results[0]:
                 result_count = len(results[0])
-                logger.info(f"检索到 {result_count} 条结果 (field={field})")
-                return [self._format_search_result(r) for r in results[0]]
-            logger.info(f"检索结果为空 (field={field})")
+                logger.info(f"向量检索到 {result_count} 条结果 (field={field})")
+                return [self._format_search_result(r, field) for r in results[0]]
+            logger.info(f"向量检索结果为空 (field={field})")
             return []
             
         except Exception as e:
-            logger.error(f"检索失败 (field={field}): {e}")
+            logger.error(f"向量检索失败 (field={field}): {e}")
             return []
     
-    def _format_search_result(self, result) -> Dict[str, Any]:
-        """格式化检索结果"""
+    async def _search_bm25(
+        self,
+        query_text: str,
+        field: str,
+        top_k: int,
+        filter_expr: str
+    ) -> List[Dict[str, Any]]:
+        try:
+            search_params = {"metric_type": "BM25", "params": {"bf": 1.0}}
+            
+            logger.info(f"执行 BM25 检索: field={field}, top_k={top_k}, query={query_text[:50]}...")
+            
+            results = self.milvus._collection.search(
+                data=[query_text],
+                anns_field=field,
+                param=search_params,
+                limit=top_k,
+                expr=filter_expr,
+                output_fields=["*"]
+            )
+            
+            if results and results[0]:
+                result_count = len(results[0])
+                logger.info(f"BM25 检索到 {result_count} 条结果 (field={field})")
+                return [self._format_search_result(r, field) for r in results[0]]
+            logger.info(f"BM25 检索结果为空 (field={field})")
+            return []
+            
+        except Exception as e:
+            logger.error(f"BM25 检索失败 (field={field}): {e}")
+            return []
+    
+    def _format_search_result(self, result, field: str) -> Dict[str, Any]:
         related_stocks_str = result.entity.get("related_stocks", "[]")
         try:
             related_stocks = json.loads(related_stocks_str) if related_stocks_str else []
@@ -185,6 +244,7 @@ class RetrievalService:
             "content": result.entity.get("content"),
             "summary": result.entity.get("summary"),
             "score": result.distance,
+            "score_type": "bm25" if field.startswith("sparse") else "vector",
             "report_id": result.entity.get("report_id"),
             "report_type": result.entity.get("report_type"),
             "filename": result.entity.get("filename"),
@@ -198,7 +258,6 @@ class RetrievalService:
         }
     
     def _normalize_scores(self, results: List[Dict]) -> Dict[str, float]:
-        """归一化分数"""
         if not results:
             return {}
         scores = [abs(r["score"]) for r in results]
@@ -210,19 +269,78 @@ class RetrievalService:
             for r in results
         }
     
+    def _calculate_threshold(
+        self,
+        results: List[Dict],
+        threshold_type: str
+    ) -> float:
+        if not results:
+            return 0
+        
+        scores = [abs(r.get("score", 0)) for r in results]
+        max_s = max(scores) if scores else 0
+        
+        if threshold_type == "vector":
+            config = self.vector_threshold
+        elif threshold_type == "bm25":
+            config = self.bm25_threshold
+        else:
+            config = self.fusion_threshold
+        
+        method = config.method if hasattr(config, 'method') else "relative"
+        ratio = config.ratio if hasattr(config, 'ratio') else 0.3
+        
+        if method == "relative" and max_s > 0:
+            return max_s * ratio
+        elif method == "fixed":
+            return ratio
+        else:
+            percentile = getattr(config, 'percentile', 30)
+            sorted_scores = sorted(scores)
+            return sorted_scores[len(sorted_scores) * percentile // 100]
+    
+    def _filter_by_threshold(
+        self,
+        results: List[Dict],
+        threshold_type: str
+    ) -> List[Dict]:
+        if not results:
+            return []
+        
+        if not self.threshold_enabled:
+            return results
+        
+        threshold = self._calculate_threshold(results, threshold_type)
+        
+        filtered = [r for r in results if abs(r.get("score", 0)) >= threshold]
+        
+        if self.log_filtered and self.log_enabled:
+            logger.info(f"阈值过滤 [{threshold_type}]: {len(results)} → {len(filtered)} (阈值={threshold:.4f})")
+            
+            if self.log_level == "debug":
+                filtered_ids = set(r["chunk_uid"] for r in filtered)
+                for r in results:
+                    if r["chunk_uid"] not in filtered_ids:
+                        logger.debug(f"  过滤: {r.get('chunk_uid')} (score={r.get('score'):.4f})")
+        
+        if len(filtered) < self.min_results:
+            filtered = results[:self.min_results]
+            logger.info(f"保底结果数: {len(filtered)}")
+        
+        return filtered
+    
     def _calculate_relevance_boost(self, result: Dict, intent_data: Dict) -> float:
-        """计算相关性加权"""
         boost = 1.0
         company_code = intent_data.get("company_code", "")
         industry_name = intent_data.get("industry_name", "")
         
-        if result["report_type"] == "stock":
+        if result.get("report_type") == "stock":
             if company_code and company_code != "NONE":
                 if result.get("ts_code") == company_code:
                     boost *= WEIGHT_STOCK_EXACT_MATCH
                     logger.info(f"Stock 精确匹配 ts_code: {company_code}")
         
-        elif result["report_type"] == "industry":
+        elif result.get("report_type") == "industry":
             if industry_name and industry_name != "NONE":
                 result_industry = result.get("industry_name", "")
                 if result_industry == industry_name:
@@ -241,89 +359,119 @@ class RetrievalService:
     
     def _fusion_results(
         self, 
-        content_results: List[Dict], 
         summary_results: List[Dict],
+        content_bm25_results: List[Dict],
+        summary_bm25_results: List[Dict],
         intent_data: Dict,
-        report_type: str,
-        bm25_results: Optional[List[Dict]] = None
     ) -> List[Dict[str, Any]]:
-        """多路结果分数融合 + 相关性加权"""
-        score_map = {}
+        logger.info(f"三路融合: summary_emb={len(summary_results)}, content_bm25={len(content_bm25_results)}, summary_bm25={len(summary_bm25_results)}")
         
-        logger.info(f"融合结果: content={len(content_results)}, summary={len(summary_results)}, bm25={len(bm25_results) if bm25_results else 0}")
+        summ_norm = self._normalize_scores(summary_results)
+        content_bm25_norm = self._normalize_scores(content_bm25_results)
+        summary_bm25_norm = self._normalize_scores(summary_bm25_results)
         
-        content_norm = self._normalize_scores(content_results)
-        summary_norm = self._normalize_scores(summary_results)
+        all_results = {}
+        for r in summary_results:
+            all_results[r["chunk_uid"]] = {**r, "source": "summary_embedding"}
+        for r in content_bm25_results:
+            if r["chunk_uid"] in all_results:
+                all_results[r["chunk_uid"]]["source"] = "content_bm25"
+            else:
+                all_results[r["chunk_uid"]] = {**r, "source": "content_bm25"}
+        for r in summary_bm25_results:
+            if r["chunk_uid"] in all_results:
+                all_results[r["chunk_uid"]]["source"] = "summary_bm25"
+            else:
+                all_results[r["chunk_uid"]] = {**r, "source": "summary_bm25"}
         
-        all_results = {r["chunk_uid"]: r for r in content_results}
-        all_results.update({r["chunk_uid"]: r for r in summary_results})
-        
-        if bm25_results:
-            bm25_norm = self._normalize_scores(bm25_results)
-            all_results.update({r["chunk_uid"]: r for r in bm25_results})
-            
-            for uid in bm25_norm:
-                if uid in score_map:
-                    score_map[uid] += WEIGHT_BM25 * bm25_norm[uid]
-                else:
-                    score_map[uid] = WEIGHT_BM25 * bm25_norm[uid]
-        
-        for uid in all_results:
+        for uid, result in all_results.items():
             score = 0
-            if uid in content_norm:
-                score += WEIGHT_CONTENT * content_norm[uid]
-            if uid in summary_norm:
-                score += WEIGHT_SUMMARY * summary_norm[uid]
+            if uid in summ_norm:
+                score += self.WEIGHT_SUMMARY_EMBEDDING * summ_norm[uid]
+            if uid in content_bm25_norm:
+                score += self.WEIGHT_CONTENT_BM25 * content_bm25_norm[uid]
+            if uid in summary_bm25_norm:
+                score += self.WEIGHT_SUMMARY_BM25 * summary_bm25_norm[uid]
             
-            relevance_boost = self._calculate_relevance_boost(all_results[uid], intent_data)
-            score_map[uid] = score * relevance_boost
+            boost = self._calculate_relevance_boost(result, intent_data)
+            result["score"] = score * boost
         
-        sorted_uids = sorted(score_map.items(), key=lambda x: x[1], reverse=True)
+        fused = sorted(all_results.values(), key=lambda x: x.get("score", 0), reverse=True)
         
-        fused_results = []
-        for uid, fused_score in sorted_uids:
-            result = all_results[uid].copy()
-            result["score"] = fused_score
-            result["report_type_in_result"] = result.get("report_type")
-            result["industry_name_in_result"] = result.get("industry_name")
-            fused_results.append(result)
+        logger.info(f"融合后结果: {len(fused)} 条")
+        return fused
+    
+    def _apply_cross_validation(self, results: List[Dict]) -> List[Dict]:
+        if not results or not self.cross_validation_enabled:
+            return results
         
-        logger.info(f"融合后结果: {len(fused_results)} 条")
-        return fused_results
+        vector_scores = [abs(r.get("score", 0)) for r in results]
+        max_vector = max(vector_scores) if vector_scores else 0
+        
+        for r in results:
+            vector_norm = abs(r.get("score", 0)) / max_vector if max_vector > 0 else 0
+            
+            if vector_norm > 0.5:
+                r["score"] = r.get("score", 0) * self.boost_when_both_high
+                r["cross_validated"] = True
+                logger.info(f"交叉验证通过: {r.get('chunk_uid')} (boost={self.boost_when_both_high})")
+        
+        return sorted(results, key=lambda x: x.get("score", 0), reverse=True)
     
     async def _search_single_type(
         self,
         query_vector: List[float],
+        query_text: str,
         top_k: int,
         request: RetrievalRequest,
         intent_data: Dict,
         report_type: str
     ) -> List[Dict[str, Any]]:
-        """单类型检索"""
         filter_expr = self._build_single_type_filter(request, intent_data, report_type)
         
-        content_results = await self._search_field(query_vector, "embedding", top_k, filter_expr)
-        summary_results = await self._search_field(query_vector, "summary_embedding", top_k, filter_expr)
+        summ_emb_task = self._search_field(query_vector, "summary_embedding", top_k, filter_expr)
+        content_bm25_task = self._search_bm25(query_text, "sparse_vector", top_k, filter_expr)
+        summary_bm25_task = self._search_bm25(query_text, "summary_sparse_vector", top_k, filter_expr)
         
-        return self._fusion_results(content_results, summary_results, intent_data, report_type)
+        summary_results, content_bm25_results, summary_bm25_results = await asyncio.gather(
+            summ_emb_task, content_bm25_task, summary_bm25_task
+        )
+        
+        logger.info(f"三路检索完成: report_type={report_type}, summ_emb={len(summary_results)}, content_bm25={len(content_bm25_results)}, summary_bm25={len(summary_bm25_results)}")
+        
+        summary_results = self._filter_by_threshold(summary_results, "vector")
+        content_bm25_results = self._filter_by_threshold(content_bm25_results, "bm25")
+        summary_bm25_results = self._filter_by_threshold(summary_bm25_results, "bm25")
+        
+        fused = self._fusion_results(
+            summary_results, content_bm25_results, summary_bm25_results,
+            intent_data
+        )
+        
+        fused = self._filter_by_threshold(fused, "fusion")
+        
+        if self.cross_validation_enabled:
+            fused = self._apply_cross_validation(fused)
+        
+        return fused
     
     async def _search_both_types(
         self,
         query_vector: List[float],
+        query_text: str,
         top_k: int,
         request: RetrievalRequest,
         intent_data: Dict
     ) -> List[Dict[str, Any]]:
-        """双类型并行检索"""
         retrieval_top_k = max(top_k * SEARCH_MULTIPLIER, top_k + 10)
         
-        logger.info(f"双类型检索: top_k={retrieval_top_k}, intent={intent_data}")
+        logger.info(f"双类型三路检索: top_k={retrieval_top_k}, intent={intent_data}")
         
         stock_task = self._search_single_type(
-            query_vector, retrieval_top_k, request, intent_data, "stock"
+            query_vector, query_text, retrieval_top_k, request, intent_data, "stock"
         )
         industry_task = self._search_single_type(
-            query_vector, retrieval_top_k, request, intent_data, "industry"
+            query_vector, query_text, retrieval_top_k, request, intent_data, "industry"
         )
         
         stock_results, industry_results = await asyncio.gather(
@@ -349,7 +497,6 @@ class RetrievalService:
         return all_results
     
     async def search(self, request: RetrievalRequest) -> RetrievalResponse:
-        """核心检索入口"""
         start_time = time.time()
         intent_data = {}
         
@@ -363,6 +510,8 @@ class RetrievalService:
             search_keywords = intent_data.get("search_keywords", request.query)
             if search_keywords == "NONE":
                 search_keywords = request.query
+            
+            query_text = search_keywords
             
             cache_key = self._generate_cache_key(request, intent_data)
             
@@ -381,11 +530,11 @@ class RetrievalService:
             
             if request.report_type:
                 fused_results = await self._search_single_type(
-                    query_vector, retrieval_top_k, request, intent_data, request.report_type
+                    query_vector, query_text, retrieval_top_k, request, intent_data, request.report_type
                 )
             else:
                 fused_results = await self._search_both_types(
-                    query_vector, retrieval_top_k, request, intent_data
+                    query_vector, query_text, retrieval_top_k, request, intent_data
                 )
             
             logger.info(f"融合后结果数: {len(fused_results)}")
@@ -466,29 +615,30 @@ class RetrievalService:
         results: List[Dict], 
         top_k: int
     ) -> List[Dict]:
-        """使用 Rerank 服务重排序"""
         try:
             texts = [r.get("content", "") or r.get("summary", "") for r in results[:top_k * 3]]
             
             logger.info(f"Rerank 请求: query={query[:50]}, texts_count={len(texts)}")
-            print(f"Rerank 请求: {query}")
-            print(f"Rerank 请求: {texts}")
-
+            
             rerank_response = await self.rerank.rerank(
                 query=query,
                 texts=texts,
                 top_k=len(texts)
             )
-            print(f"Rerank 响应: {rerank_response}")
-            logger.info(f"Rerank 响应: model={rerank_response.get('model')}, total={rerank_response.get('total_texts')}, time={rerank_response.get('processing_time')}")
             
-            rerank_map = {r.get('index'): r.get('score') for r in rerank_response.get('results')}
+            logger.info(f"Rerank 响应 raw: {rerank_response}")
+            
+            if isinstance(rerank_response, dict) and "results" in rerank_response:
+                rerank_map = {r.get("index", i): r.get("score", 0) for i, r in enumerate(rerank_response.get("results", []))}
+            else:
+                logger.warning(f"Rerank 响应格式异常")
+                return results
+            
             logger.info(f"Rerank 分数映射: {rerank_map}")
             
             for i, result in enumerate(results):
-                #
-                result["rerank_score"] = rerank_map.get(i, 0)
                 if i in rerank_map:
+                    result["rerank_score"] = rerank_map[i]
                     result["score"] = rerank_map[i]
             
             results = sorted(results, key=lambda x: x.get("rerank_score", 0) or 0, reverse=True)

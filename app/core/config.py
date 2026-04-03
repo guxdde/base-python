@@ -177,6 +177,42 @@ class LLMConfig(BaseModel):
     timeout: int
 
 
+class ThresholdConfig(BaseModel):
+    """阈值配置"""
+    enabled: bool = True
+    method: str = "relative"  # relative / percentile / fixed
+    ratio: float = 0.3
+
+
+class RetrievalThresholdConfig(BaseModel):
+    """检索阈值配置"""
+    enabled: bool = True
+
+    vector: ThresholdConfig = ThresholdConfig(method="relative", ratio=0.3)
+    bm25: ThresholdConfig = ThresholdConfig(method="relative", ratio=0.3)
+    fusion: ThresholdConfig = ThresholdConfig(method="relative", ratio=0.2)
+
+    cross_validation: bool = True
+    min_vector_ratio: float = 0.1
+    min_bm25_ratio: float = 0.05
+    boost_when_both_high: float = 1.2
+
+    log_enabled: bool = True
+    log_filtered: bool = True
+    log_level: str = "info"
+    min_results: int = 3
+
+
+class RetrievalConfig(BaseModel):
+    """检索服务配置"""
+    weights: Dict[str, float] = {
+        "summary_embedding": 0.4,
+        "content_bm25": 0.3,
+        "summary_bm25": 0.3
+    }
+    threshold: RetrievalThresholdConfig = RetrievalThresholdConfig()
+
+
 class Settings(BaseModel):
     """应用配置"""
 
@@ -210,6 +246,8 @@ class Settings(BaseModel):
     milvus: Optional[MilvusConfig] = None
     embedding_service: Optional[EmbeddingServiceConfig] = None
     rerank_service: Optional[RerankServiceConfig] = None
+
+    retrieval: Optional[RetrievalConfig] = None
 
     @classmethod
     def from_yaml(cls, yaml_path: str = "config.yaml") -> "Settings":
@@ -309,6 +347,32 @@ class Settings(BaseModel):
         if "rerank_service" in config_data:
             rerank = config_data["rerank_service"]
             parsed_config["rerank_service"] = RerankServiceConfig(**rerank)
+
+        if "retrieval" in config_data:
+            retrieval = config_data["retrieval"]
+            
+            weights = retrieval.get("weights", {})
+            threshold = retrieval.get("threshold", {})
+            
+            threshold_config = RetrievalThresholdConfig(
+                enabled=threshold.get("enabled", True),
+                vector=ThresholdConfig(**threshold.get("vector", {})),
+                bm25=ThresholdConfig(**threshold.get("bm25", {})),
+                fusion=ThresholdConfig(**threshold.get("fusion", {})),
+                cross_validation=threshold.get("cross_validation", {}).get("enabled", True),
+                min_vector_ratio=threshold.get("cross_validation", {}).get("min_vector_ratio", 0.1),
+                min_bm25_ratio=threshold.get("cross_validation", {}).get("min_bm25_ratio", 0.05),
+                boost_when_both_high=threshold.get("cross_validation", {}).get("boost_when_both_high", 1.2),
+                log_enabled=threshold.get("log", {}).get("enabled", True),
+                log_filtered=threshold.get("log", {}).get("log_filtered", True),
+                log_level=threshold.get("log", {}).get("log_level", "info"),
+                min_results=threshold.get("log", {}).get("min_results", 3),
+            )
+            
+            parsed_config["retrieval"] = RetrievalConfig(
+                weights=weights,
+                threshold=threshold_config
+            )
 
         return cls(**parsed_config)
 

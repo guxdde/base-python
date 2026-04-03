@@ -315,3 +315,50 @@ celery -A app.core.celery._celery_app_instance beat
 ### 4. 死信未保存到数据库
 
 检查数据库连接配置，确保 `dead_letter_records` 表已创建。
+
+
+### 配置示例
+```yaml
+# 检索服务配置
+retrieval:
+  # 权重配置
+  weights:
+    summary_embedding: 0.4    # 摘要向量
+    content_bm25: 0.3         # 内容 BM25
+    summary_bm25: 0.3        # 摘要 BM25
+
+  # 阈值配置
+  threshold:
+    enabled: true
+
+    # 向量检索阈值
+    vector:
+      enabled: true
+      method: "relative"      # relative / percentile / fixed
+      ratio: 0.3              # max × ratio (相对阈值)
+
+    # BM25 阈值
+    bm25:
+      enabled: true
+      method: "relative"
+      ratio: 0.3
+
+    # 融合后阈值
+    fusion:
+      method: "relative"
+      ratio: 0.2
+
+    # BM25 交叉验证
+    cross_validation:
+      enabled: true            # 可配置开关
+      min_vector_ratio: 0.1   # 向量最低 10%
+      min_bm25_ratio: 0.05    # BM25 最低 5%
+      boost_when_both_high: 1.2  # 两路都高时的加权
+
+    # 日志配置
+    log:
+      enabled: true
+      log_filtered: true      # 记录被过滤的结果
+      log_level: "info"       # info / debug
+      min_results: 3          # 最少保留结果数
+```
