@@ -9,6 +9,7 @@ from app.core.milvus import get_milvus, milvus_service
 from app.models.chunk import ProcessStatusEnum, StockResearchReportRecord, IndustryResearchReportRecord
 from sqlalchemy import select
 from app.services.embedding_service import get_embedding_service
+from app.services.retrieval.industry_normalizer import resolve_industry, normalize_to_level1
 
 _logger = logging.getLogger(__name__)
 
@@ -63,6 +64,18 @@ async def insert_chunks_to_milvus(report_type: str, report_id: int) -> Dict[str,
             else:
                 _logger.info(f"无旧数据需要删除或删除失败，继续插入")
 
+            ts_code = getattr(record, 'ts_code', None)
+            existing_industry = getattr(record, 'industry_name', None)
+            
+            normalized_industry = await resolve_industry(
+                report_type=report_type,
+                report_id=report_id,
+                ts_code=ts_code,
+                existing_industry=existing_industry
+            )
+            
+            _logger.info(f"研报 {report_type}:{report_id} 行业标准化结果: {normalized_industry}")
+
             embedding_service = get_embedding_service()
 
             contents = [chunk.get("content", "") for chunk in chunks]
@@ -76,6 +89,10 @@ async def insert_chunks_to_milvus(report_type: str, report_id: int) -> Dict[str,
             for i, chunk in enumerate(chunks):
                 chunk["embedding"] = content_embeddings[i] if i < len(content_embeddings) else []
                 chunk["summary_embedding"] = summary_embeddings[i] if i < len(summary_embeddings) else []
+                
+                metadata = chunk.get("metadata", {})
+                metadata["industry_name"] = normalized_industry
+                chunk["metadata"] = metadata
 
             insert_success = await milvus_service.insert_chunks(chunks)
 

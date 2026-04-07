@@ -82,9 +82,23 @@ class MilvusService:
             FieldSchema(name="report_type", dtype=DataType.VARCHAR, max_length=16),
             FieldSchema(name="report_id", dtype=DataType.INT32),
             FieldSchema(name="chunk_index", dtype=DataType.INT32),
-            # content 字段需要 enable_analyzer=true 才能使用 BM25 函数
-            FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=4096, enable_analyzer=True),
-            FieldSchema(name="summary", dtype=DataType.VARCHAR, max_length=2048, enable_analyzer=True),
+            # content/summary 字段使用 jieba 中文分词器
+            FieldSchema(
+                name="content", 
+                dtype=DataType.VARCHAR, 
+                max_length=4096,
+                enable_analyzer=True,
+                analyzer_params={"type": "chinese"},
+                enable_match=True
+            ),
+            FieldSchema(
+                name="summary", 
+                dtype=DataType.VARCHAR, 
+                max_length=2048,
+                enable_analyzer=True,
+                tokenizer_params={"type": "chinese"},
+                enable_match=True
+            ),
             FieldSchema(name="source", dtype=DataType.VARCHAR, max_length=512),
             FieldSchema(name="filename", dtype=DataType.VARCHAR, max_length=512),
             FieldSchema(name="trade_date", dtype=DataType.VARCHAR, max_length=16),

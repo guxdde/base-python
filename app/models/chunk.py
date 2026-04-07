@@ -43,6 +43,7 @@ class StockResearchReportRecord(Base, IntBaseModel):
     ts_code = Column(String(16), nullable=False, index=True, comment="股票代码，统一字段")
     symbol = Column(String(16), nullable=True, comment="股票代码，不带后缀")
     company_name = Column(String(32), nullable=True, comment="股票名称")
+    industry_name = Column(String(32), nullable=True, index=True, comment="行业名称（一级行业）")
     org_name = Column(String(128), nullable=True, comment="发布组织")
     org_code = Column(String(32), nullable=True, comment="组织代码")
     info_code = Column(String(32), nullable=True, comment="研报获取关键字段")

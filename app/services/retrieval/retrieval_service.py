@@ -12,6 +12,7 @@ from app.services.embedding_service import get_embedding_service
 from app.services.rerank_service import get_rerank_service
 from app.services.retrieval.intent_router import analyze_query_intent
 from app.services.retrieval.time_decay import apply_time_decay
+from app.services.retrieval.industry_normalizer import normalize_to_level1
 from app.services.retrieval.models import (
     RetrievalRequest, 
     RetrievalResult, 
@@ -114,6 +115,13 @@ class RetrievalService:
         conditions = []
         conditions.append('report_type == "stock"')
         
+        industry_name = None
+        if request.industry_name or (intent_data.get("industry_name") and intent_data["industry_name"] != "NONE"):
+            raw_industry = request.industry_name or intent_data.get("industry_name", "")
+            industry_name = normalize_to_level1(raw_industry)
+            conditions.append(f'industry_name == "{industry_name}"')
+            logger.info(f"识别到 Stock 行业过滤: {raw_industry} -> {industry_name}")
+        
         if request.ts_code or (intent_data.get("company_code") and intent_data["company_code"] != "NONE"):
             ts_code = request.ts_code or intent_data.get("company_code", "")
             conditions.append(f'ts_code == "{ts_code}"')
@@ -129,6 +137,7 @@ class RetrievalService:
         
         expr = " and ".join(conditions)
         logger.info(f"Stock 过滤表达式: {expr}")
+        print(f"[DEBUG] Stock 过滤表达式: {expr}")
         return expr
     
     def _build_industry_filter_expr(self, request: RetrievalRequest, intent_data: Dict) -> str:
@@ -137,9 +146,10 @@ class RetrievalService:
         
         industry_name = None
         if request.industry_name or (intent_data.get("industry_name") and intent_data["industry_name"] != "NONE"):
-            industry_name = request.industry_name or intent_data.get("industry_name", "")
+            raw_industry = request.industry_name or intent_data.get("industry_name", "")
+            industry_name = normalize_to_level1(raw_industry)
             conditions.append(f'industry_name == "{industry_name}"')
-            logger.info(f"识别到行业过滤: {industry_name}")
+            logger.info(f"识别到 Industry 行业过滤: {raw_industry} -> {industry_name}")
         
         if request.org_name:
             conditions.append(f'org_name == "{request.org_name}"')
@@ -156,6 +166,7 @@ class RetrievalService:
         
         expr = " and ".join(conditions)
         logger.info(f"Industry 过滤表达式: {expr}")
+        print(f"[DEBUG] Industry 过滤表达式: {expr}")
         return expr
     
     def _build_single_type_filter(self, request: RetrievalRequest, intent_data: Dict, report_type: str) -> str:
@@ -178,6 +189,7 @@ class RetrievalService:
             }
             
             logger.info(f"执行向量检索: field={field}, top_k={top_k}, filter={filter_expr[:100]}...")
+            print(f"[DEBUG] 向量检索: field={field}, top_k={top_k}, filter={filter_expr[:100]}...")
             
             results = self.milvus._collection.search(
                 data=[query_vector],
@@ -191,7 +203,13 @@ class RetrievalService:
             if results and results[0]:
                 result_count = len(results[0])
                 logger.info(f"向量检索到 {result_count} 条结果 (field={field})")
-                return [self._format_search_result(r, field) for r in results[0]]
+                print(f"[DEBUG] 向量检索到 {result_count} 条结果 (field={field})")
+                
+                formatted_results = [self._format_search_result(r, field) for r in results[0]]
+                for i, r in enumerate(formatted_results[:5]):
+                    print(f"[DEBUG] 向量 result[{i}]: chunk_uid={r.get('chunk_uid')}, score={r.get('score'):.4f}, industry={r.get('industry_name')}, content_preview={r.get('content', '')[:50]}...")
+                
+                return formatted_results
             logger.info(f"向量检索结果为空 (field={field})")
             return []
             
@@ -210,6 +228,7 @@ class RetrievalService:
             search_params = {"metric_type": "BM25", "params": {"bf": 1.0}}
             
             logger.info(f"执行 BM25 检索: field={field}, top_k={top_k}, query={query_text[:50]}...")
+            print(f"[DEBUG] BM25 检索: field={field}, top_k={top_k}, query={query_text[:50]}...")
             
             results = self.milvus._collection.search(
                 data=[query_text],
@@ -223,7 +242,13 @@ class RetrievalService:
             if results and results[0]:
                 result_count = len(results[0])
                 logger.info(f"BM25 检索到 {result_count} 条结果 (field={field})")
-                return [self._format_search_result(r, field) for r in results[0]]
+                print(f"[DEBUG] BM25 检索到 {result_count} 条结果 (field={field})")
+                
+                formatted_results = [self._format_search_result(r, field) for r in results[0]]
+                for i, r in enumerate(formatted_results[:5]):
+                    print(f"[DEBUG] BM25 result[{i}]: chunk_uid={r.get('chunk_uid')}, score={r.get('score'):.4f}, industry={r.get('industry_name')}, content_preview={r.get('content', '')[:50]}...")
+                
+                return formatted_results
             logger.info(f"BM25 检索结果为空 (field={field})")
             return []
             
@@ -438,6 +463,16 @@ class RetrievalService:
         )
         
         logger.info(f"三路检索完成: report_type={report_type}, summ_emb={len(summary_results)}, content_bm25={len(content_bm25_results)}, summary_bm25={len(summary_bm25_results)}")
+        print(f"[DEBUG] 三路检索完成: report_type={report_type}")
+        print(f"[DEBUG]   summary_embedding: {len(summary_results)} 条")
+        for i, r in enumerate(summary_results[:3]):
+            print(f"[DEBUG]     [{i}] chunk_uid={r.get('chunk_uid')}, score={r.get('score'):.4f}, industry={r.get('industry_name')}, content={r.get('content', '')[:30]}...")
+        print(f"[DEBUG]   content_bm25: {len(content_bm25_results)} 条")
+        for i, r in enumerate(content_bm25_results[:3]):
+            print(f"[DEBUG]     [{i}] chunk_uid={r.get('chunk_uid')}, score={r.get('score'):.4f}, industry={r.get('industry_name')}, content={r.get('content', '')[:30]}...")
+        print(f"[DEBUG]   summary_bm25: {len(summary_bm25_results)} 条")
+        for i, r in enumerate(summary_bm25_results[:3]):
+            print(f"[DEBUG]     [{i}] chunk_uid={r.get('chunk_uid')}, score={r.get('score'):.4f}, industry={r.get('industry_name')}, content={r.get('content', '')[:30]}...")
         
         summary_results = self._filter_by_threshold(summary_results, "vector")
         content_bm25_results = self._filter_by_threshold(content_bm25_results, "bm25")
@@ -447,6 +482,10 @@ class RetrievalService:
             summary_results, content_bm25_results, summary_bm25_results,
             intent_data
         )
+        
+        print(f"[DEBUG] 融合后结果: {len(fused)} 条")
+        for i, r in enumerate(fused[:5]):
+            print(f"[DEBUG]   [{i}] chunk_uid={r.get('chunk_uid')}, score={r.get('score'):.4f}, type={r.get('report_type')}, industry={r.get('industry_name')}, content={r.get('content', '')[:30]}...")
         
         fused = self._filter_by_threshold(fused, "fusion")
         
@@ -505,6 +544,7 @@ class RetrievalService:
             logger.info(f"========== 检索开始 ==========")
             logger.info(f"用户问题: {request.query}")
             logger.info(f"意图识别结果: {intent_data}")
+            print(f"[DEBUG] 意图识别: {intent_data}")
             logger.info(f"请求参数: top_k={request.top_k}, report_type={request.report_type}, use_rerank={request.use_rerank}")
             
             search_keywords = intent_data.get("search_keywords", request.query)
