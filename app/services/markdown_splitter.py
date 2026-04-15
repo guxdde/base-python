@@ -10,6 +10,7 @@ from langchain_core.documents import Document
 
 from app.core.database import dbm
 from app.models.chunk import ProcessStatusEnum, StockResearchReportRecord, IndustryResearchReportRecord
+from app.services.chunk_filter import filter_chunks
 from sqlalchemy import select
 
 _logger = logging.getLogger(__name__)
@@ -199,8 +200,19 @@ class PDFServiceChunkMixin:
                 if not chunks:
                     return {"success": False, "message": "分块结果为空"}
 
+                # 将 Document 转换为 dict 列表进行过滤
+                chunk_dicts = []
+                for chunk in chunks:
+                    chunk_dicts.append({
+                        "content": chunk.page_content,
+                        "metadata": chunk.metadata
+                    })
+
+                # 过滤噪声块
+                filtered_chunks, filter_stats = filter_chunks(chunk_dicts)
+
                 json_output_path = os.path.join(output_path, "chunks.json")
-                save_success = self.splitter.save_chunks_json(chunks, json_output_path)
+                save_success = self.splitter.save_chunks_json(filtered_chunks, json_output_path)
 
                 if not save_success:
                     return {"success": False, "message": "保存 JSON 失败"}
@@ -211,7 +223,9 @@ class PDFServiceChunkMixin:
                 return {
                     "success": True,
                     "message": "分块成功",
-                    "chunk_count": len(chunks),
+                    "original_chunk_count": len(chunks),
+                    "filtered_chunk_count": len(filtered_chunks),
+                    "filter_stats": filter_stats,
                     "output_path": json_output_path,
                 }
 

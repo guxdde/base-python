@@ -13,6 +13,7 @@ from app.services.rerank_service import get_rerank_service
 from app.services.retrieval.intent_router import analyze_query_intent
 from app.services.retrieval.time_decay import apply_time_decay
 from app.services.retrieval.industry_normalizer import normalize_to_level1
+from app.services.chunk_filter import should_include_noise
 from app.services.retrieval.models import (
     RetrievalRequest, 
     RetrievalResult, 
@@ -578,6 +579,21 @@ class RetrievalService:
                 )
             
             logger.info(f"融合后结果数: {len(fused_results)}")
+            
+            # 过滤噪声块（默认排除噪声类型，除非查询明确要求）
+            include_noise = should_include_noise(request.query)
+            if not include_noise:
+                original_count = len(fused_results)
+                fused_results = [
+                    r for r in fused_results 
+                    if r.get("chunk_type", "content") != "risk" 
+                    and r.get("chunk_type", "content") != "rating"
+                    and r.get("chunk_type", "content") != "contact"
+                ]
+                if original_count != len(fused_results):
+                    logger.info(f"噪声过滤: {original_count} -> {len(fused_results)} (排除 {original_count - len(fused_results)} 条)")
+            else:
+                logger.info(f"查询包含噪声关键词，保留噪声内容")
             
             decay_results = apply_time_decay(
                 fused_results,
