@@ -13,10 +13,11 @@ asyncpg==0.31.0
 # Redis
 redis>=5.0.0
 
-# Celery
-celery==5.4.0
-kombu==5.4.0
-croniter==5.0.1
+# TaskIQ
+taskiq==0.0.42
+taskiq-brokers[redis]
+taskiq-redis
+croniter==5.0.1  # Still useful for cron expressions
 
 # Config
 pyyaml>=6.0

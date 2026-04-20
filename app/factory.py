@@ -8,7 +8,7 @@ from starlette.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.database import init_databases, close_databases
 from app.core.redis import redis_service
-from app.core import celery as core_celery
+from app.core import taskiq as core_taskiq
 
 _logger = logging.getLogger(__name__)
 
@@ -17,44 +17,29 @@ _celery_app: Optional[Any] = None
 def get_celery_app() -> Any:
     """
     Return a configured Celery app singleton.
-    - If `settings` is None, will try to use core_config.settings if present.
-    - Uses the _celery_app_instance factory in app.core.celery when available.
+    Deprecated: Use get_taskiq_app() instead.
+    Kept for backward compatibility during migration.
     """
     global _celery_app
     if _celery_app is not None:
         return _celery_app
 
-
-    app_factory = getattr(core_celery, "_celery_app_instance", None)
-    if app_factory is None:
-        try:
-            app_factory = core_celery._CeleryApp()
-            core_celery._celery_app_instance = app_factory
-        except Exception as e:
-            _logger.exception("Failed to instantiate Celery factory: %s", e)
-            app_factory = None
-
-    if app_factory is not None:
-        try:
-            _celery_app = app_factory.get_app()
-            return _celery_app
-        except Exception:
-            _logger.exception("Failed to build Celery app using factory; falling back")
-
-    # Fallback: minimal Celery instance (best-effort)
+    # For backward compatibility, create a dummy Celery app
     try:
         from celery import Celery
-        broker = None
-        try:
-            broker = core_celery._build_broker_url_from_settings()
-        except Exception:
-            pass
-        _celery_app = Celery("app", broker=broker)
+        _celery_app = Celery("app")
+        _logger.warning("Using fallback Celery app. Please migrate to TaskIQ.")
     except Exception:
-        _logger.exception("Fallback Celery app creation failed")
+        _logger.exception("Failed to create fallback Celery app")
         _celery_app = None
 
     return _celery_app
+
+def get_taskiq_app():
+    """
+    Return the TaskIQ app instance.
+    """
+    return core_taskiq.taskiq_app
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -72,8 +57,16 @@ async def lifespan(app: FastAPI):
     print("Redis连接初始化完成")
 
     # 导入定时任务模块，注册定时任务
-    from app.tasks import scheduled_tasks  # noqa: F401
+    from app.tasks import scheduled_tasks, register_manual_schedules  # noqa: F401
     _logger.info("定时任务模块已加载")
+
+    # 初始化TaskIQ调度器
+    await core_taskiq.init_scheduler()
+    _logger.info("TaskIQ调度器已初始化")
+
+    # 注册手动添加的定时任务
+    await register_manual_schedules()
+    _logger.info("手动定时任务已注册")
     
     # await register_all()  # 扫描并注册任务
     # await get_scheduler()  # 确保调度器启动
@@ -90,6 +83,11 @@ async def lifespan(app: FastAPI):
     # 关闭Redis连接
     await redis_service.close_redis()
     print("Redis连接已关闭")
+
+    # 停止TaskIQ调度器
+    if core_taskiq.scheduler and core_taskiq.scheduler.is_running:
+        core_taskiq.scheduler.terminate()
+        print("TaskIQ调度器已停止")
 
 
 def create_app() -> FastAPI:
