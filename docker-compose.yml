@@ -1,82 +1,110 @@
-version: "3"
+version: "3.8"
 
 services:
   redis:
-    image: "redis:latest"
-#    restart: "${DOCKER_RESTART_POLICY:-unless-stopped}"
-#    stop_grace_period: "${DOCKER_STOP_GRACE_PERIOD:-3s}"
-#    volumes:
-#      - "/opt/redis_data:/data"
-#      - "/opt/redis_data:/etc/redis/redis.conf"
-
-    command: ["redis-server", "--requirepass km111"]
+    image: "redis:7-alpine"
+    command: ["redis-server", "--requirepass km111", "--appendonly", "yes"]
     ports:
       - "6379:6379"
-      
-  rabbitmq:
-    image: "rabbitmq:3-management"
-    hostname: "rabbitmq"
-    environment:
-      - RABBITMQ_DEFAULT_USER=admin_mq
-      - RABBITMQ_DEFAULT_PASS=Km@MQ2024#secure
-      # 修改日志位置到数据目录下
-      - RABBITMQ_LOGS=/var/lib/rabbitmq/logs/rabbit.log
-      - RABBITMQ_SASL_LOGS=/var/lib/rabbitmq/logs/rabbit-sasl.log
-    ports:
-      - "5672:5672"   # AMQP 协议端口
-      - "15672:15672" # 管理界面端口
     volumes:
-      - "/opt/rabbitmq/data:/var/lib/rabbitmq"
-      # 不再直接挂载到/var/log/rabbitmq
-    user: "999:999"  # 使用rabbitmq用户运行容器
-      
+      - "E:\\base-python\\redis:/data"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - app_network
+
+  postgres:
+    image: "timescale/timescaledb:2.25.2-pg17"
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: km111
+      POSTGRES_USER: test
+      POSTGRES_DB: base
+    ports:
+      - "5432:5432"
+    volumes:
+      - "E:\\base-python\\postgres:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app_network
+
+  rabbitmq:
+    image: "rabbitmq:4.0.2-management"
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: km111
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - "E:\\base-python\\rabbitmq:/var/lib/rabbitmq"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app_network
+
   web:
-    # image: "finance:3.0"
+    image: base-python:1.0
     build:
       context: .
       dockerfile: Dockerfile
-    command: uvicorn main:app --host 0.0.0.0 --port 8099 --workers 4
+    command: uvicorn main:app --host 0.0.0.0 --port 8080 --workers 4
     depends_on:
-      - "redis"
-      - "mysql"
-      - "rabbitmq"
+      - redis
+      - postgres
     ports:
       - "8099:8099"
       - "8080:8080"
     volumes:
       - "./:/app"
-      - "/media/uploads:/media/uploads"
     environment:
       - TZ=Asia/Shanghai
+    networks:
+      - app_network
 
-  worker:
-#    image: "finance:3.0"
+  taskiq-worker:
+    image: base-python:1.0
     build:
       context: .
       dockerfile: Dockerfile
-    command: dramatiq app.tasks.tasks --processes 8 --threads 32 --verbose --pid-file /tmp/dramatiq.pid
+    command: python -m taskiq worker app.core.taskiq:redis_broker --workers 8
     depends_on:
-      - "redis"
-      - "mysql"
-      - "rabbitmq"
+      - redis
+      - postgres
     volumes:
       - "./:/app"
     environment:
       - TZ=Asia/Shanghai
-  mysql:
-    image: mysql:8.0
-    restart: always
-    container_name: finance_v3_mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: unix1234
-      TZ: Asia/Shanghai
-      MYSQL_DATABASE: finance
-    ports:
-      - 3316:3306
-    volumes:
-      - "/opt/finance_v3_mysql/mysql/data:/var/lib/mysql"
-      - "/opt/finance_v3_mysql/mysql/conf/:/etc/mysql/conf.d/"
-      - "/opt/finance_v3_mysql/logs:/logs"
+    networks:
+      - app_network
 
-#volumes:
-#  redis: {}
+  taskiq-scheduler:
+    image: base-python:1.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m taskiq scheduler app.core.taskiq:scheduler
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - "./:/app"
+    environment:
+      - TZ=Asia/Shanghai
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge

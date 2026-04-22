@@ -6,7 +6,7 @@ import asyncio
 from app.core.base_endpoint import BaseHTTPEndpoint
 from app.core.database import dbm
 from app.core.dead_letter import DeadLetterManager
-from app.core import celery as core_celery
+from app.core.taskiq import taskiq_app
 
 router = APIRouter()
 
@@ -67,13 +67,7 @@ class DeadLetterRetryEndpoint(BaseHTTPEndpoint):
         
         manager = DeadLetterManager(db)
         
-        celery_app = None
-        try:
-            celery_app = core_celery.get_celery_app()
-        except Exception:
-            pass
-        
-        new_task_id = await manager.retry(record_id, celery_app=celery_app, queue=queue)
+        new_task_id = await manager.retry_taskiq(record_id, taskiq_app=taskiq_app, queue=queue)
         
         if new_task_id:
             return self.success_response({

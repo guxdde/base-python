@@ -17,7 +17,7 @@ services:
 
   fastapi:
     build:
-      context: ../src
+      context: ..
       dockerfile: Dockerfile
     container_name: app-fastapi
     env_file:
@@ -25,45 +25,51 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ../src:/app
+      - ../:/app
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
+    networks:
+      - app_network
 
-  celery-worker:
+  taskiq-worker:
     build:
-      context: ../src
+      context: ..
       dockerfile: Dockerfile
-    container_name: app-celery-worker
+    container_name: app-taskiq-worker
     env_file:
       - .env
     volumes:
-      - ../src:/app
+      - ../:/app
     depends_on:
-      - rabbitmq
       - redis
       - postgres
-    command: celery -A worker worker --loglevel=info --concurrency=6 -n worker1@%h
+    command: python -m taskiq worker app.core.taskiq:redis_broker --workers 8
     restart: unless-stopped
+    networks:
+      - app_network
 
-  celery-beat:
+  taskiq-scheduler:
     build:
-      context: ../src
+      context: ..
       dockerfile: Dockerfile
-    container_name: app-celery-beat
+    container_name: app-taskiq-scheduler
     env_file:
       - .env
     volumes:
-      - ../src:/app
+      - ../:/app
     depends_on:
-      - rabbitmq
       - redis
       - postgres
-    command: celery -A worker beat --loglevel=info
+    command: python -m taskiq scheduler app.core.taskiq:scheduler
     restart: unless-stopped
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge

@@ -11,11 +11,6 @@ services:
       file: infra.yml
       service: postgres
 
-  rabbitmq:
-    extends:
-      file: infra.yml
-      service: rabbitmq
-
   openresty:
     extends:
       file: app.yml
@@ -26,12 +21,12 @@ services:
       file: app.yml
       service: fastapi
 
-  celery-worker:
+  taskiq-worker:
     extends:
       file: app.yml
-      service: celery-worker
+      service: taskiq-worker
 
-  celery-beat:
+  taskiq-scheduler:
     extends:
       file: app.yml
-      service: celery-beat
+      service: taskiq-scheduler

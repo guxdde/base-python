@@ -1,7 +1,7 @@
 # Core
-fastapi==0.104.1
-uvicorn==0.34.3
-starlette==0.27.0
+fastapi>=0.115.0
+uvicorn>=0.34.0
+starlette>=0.40.0
 
 # Database
 sqlalchemy>=2.0.35
@@ -14,10 +14,9 @@ asyncpg==0.31.0
 redis>=5.0.0
 
 # TaskIQ
-taskiq==0.0.42
-taskiq-brokers[redis]
+taskiq[cli]>=0.12.0
 taskiq-redis
-croniter==5.0.1  # Still useful for cron expressions
+croniter>=5.0.1
 
 # Config
 pyyaml>=6.0
@@ -31,6 +30,9 @@ passlib>=1.7.4
 # HTTP
 httpx>=0.28.0
 requests>=2.32.0
+
+# WebSocket
+websockets>=13.0
 
 # Utils
 python-multipart>=0.0.6

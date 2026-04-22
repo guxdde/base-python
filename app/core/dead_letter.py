@@ -118,6 +118,14 @@ class DeadLetterManager:
         celery_app=None,
         queue: Optional[str] = None,
     ) -> Optional[str]:
+        return await self.retry_taskiq(record_id, taskiq_app=None, queue=queue)
+
+    async def retry_taskiq(
+        self, 
+        record_id: int, 
+        taskiq_app=None,
+        queue: Optional[str] = None,
+    ) -> Optional[str]:
         record = await self.get_by_id(record_id)
         if not record:
             logger.warning(f"Dead letter record not found: {record_id}")
@@ -141,17 +149,23 @@ class DeadLetterManager:
             
             task_queue = queue or record.queue
             
-            if celery_app:
-                result = celery_app.send_task(
-                    record.task_name,
-                    args=record.args,
-                    kwargs=record.kwargs,
-                    queue=task_queue,
-                )
-                logger.info(f"Task retried: {record.task_name}, new task_id: {result.id}")
-                return result.id
+            if taskiq_app:
+                task_func = taskiq_app.find_task(record.task_name)
+                if task_func:
+                    task = task_func.kiq(
+                        *record.args,
+                        **record.kwargs,
+                        queue=task_queue,
+                    )
+                    logger.info(f"Task retried: {record.task_name}, new task_id: {task.task_id}")
+                    return task.task_id
+                else:
+                    logger.error(f"TaskIQ task not found: {record.task_name}")
+                    record.status = DeadLetterStatus.PENDING
+                    await self.db.commit()
+                    return None
             else:
-                logger.error("Celery app not available for retry")
+                logger.error("TaskIQ app not available for retry")
                 record.status = DeadLetterStatus.PENDING
                 await self.db.commit()
                 return None
