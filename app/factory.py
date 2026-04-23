@@ -7,6 +7,7 @@ from starlette.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.database import init_databases, close_databases
 from app.core.redis import redis_service
+from app.core.taskiq import redis_broker
 
 _logger = logging.getLogger(__name__)
 
@@ -22,9 +23,15 @@ async def lifespan(app: FastAPI):
     await redis_service.init_redis()
     print("Redis连接初始化完成")
 
+    await redis_broker.startup()
+    print("TaskIQ broker 初始化完成")
+
     yield
 
     print("应用关闭中...")
+    
+    await redis_broker.shutdown()
+    print("TaskIQ broker 已关闭")
     
     await close_databases()
     print("所有数据库连接已关闭")

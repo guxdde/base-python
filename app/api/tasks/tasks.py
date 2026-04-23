@@ -1,25 +1,30 @@
+import logging
+from typing import Optional
+
 from fastapi import APIRouter
 
+from app.api.response import ResponseCode
 from app.core.base_endpoint import BaseHTTPEndpoint
-from app.core.taskiq import taskiq_app
+from app.core.taskiq import QUEUE_HIGH, QUEUE_DEFAULT, QUEUE_LOW
+from app.tasks.scheduled_tasks import io_blocking_task
 
 router = APIRouter()
+_logger = logging.getLogger(__name__)
 
 
 def _get_all_tasks():
-    """获取所有任务"""
-    try:
-        return taskiq_app.get_all_tasks()
-    except Exception:
-        return {}
+    """获取所有已注册任务"""
+    return task_map
 
 
 def _find_task(name):
     """查找任务"""
-    try:
-        return taskiq_app.find_task(name)
-    except Exception:
-        return None
+    return task_map.get(name)
+
+
+task_map = {
+    "io_blocking_task": io_blocking_task,
+}
 
 
 class TaskListEndpoint(BaseHTTPEndpoint):
@@ -45,7 +50,7 @@ class TaskListEndpoint(BaseHTTPEndpoint):
                 "total": len(task_list),
             })
         except Exception as e:
-            return self.error_response(message=f"Failed to get tasks: {str(e)}")
+            return self.error_response(ResponseCode.server_error, message=f"Failed to get tasks: {str(e)}")
 
 
 class TaskDetailEndpoint(BaseHTTPEndpoint):
@@ -58,9 +63,9 @@ class TaskDetailEndpoint(BaseHTTPEndpoint):
                     "queue": getattr(task_func, 'queue', 'default'),
                 })
         except Exception as e:
-            return self.error_response(message=f"Failed to get task: {str(e)}")
+            return self.error_response(ResponseCode.server_error, message=f"Failed to get task: {str(e)}")
 
-        return self.error_response(message=f"Task {task_name} not found")
+        return self.error_response(ResponseCode.not_found, message=f"Task {task_name} not found")
 
 
 class TaskRunEndpoint(BaseHTTPEndpoint):
@@ -71,6 +76,7 @@ class TaskRunEndpoint(BaseHTTPEndpoint):
         args = data.get("args", [])
         kwargs = data.get("kwargs", {})
         queue = data.get("queue")
+        priority = data.get("priority")
 
         try:
             task_func = _find_task(task_name)
@@ -78,20 +84,33 @@ class TaskRunEndpoint(BaseHTTPEndpoint):
             if not task_func:
                 return self.error_response(message=f"Task {task_name} not found")
 
-            send_kwargs = {}
+            send_labels = {}
             if queue:
-                send_kwargs['queue'] = queue
+                send_labels["queue_name"] = queue
+            if priority is not None:
+                send_labels["priority"] = priority
 
-            task = task_func.kiq(*args, **kwargs, **send_kwargs)
+            kicker = task_func.kicker()
+            if send_labels:
+                kicker = kicker.with_labels(**send_labels)
+
+            task = await kicker.kiq(*args, **kwargs)
+            _logger.info(
+                f"Task dispatched: task_id={task.task_id}, task_name={task_name}, "
+                f"queue={queue or 'default'}, priority={priority}"
+            )
 
             return self.success_response({
                 "task_id": task.task_id,
                 "task_name": task_name,
+                "queue": queue or QUEUE_DEFAULT,
+                "priority": priority,
                 "status": "PENDING",
             })
 
         except Exception as e:
-            return self.error_response(message=f"Failed to run task: {str(e)}")
+            _logger.exception(f"Failed to run task {task_name}: {e}")
+            return self.error_response(ResponseCode.server_error, message=f"Failed to run task: {str(e)}")
 
 
 class TaskStatusEndpoint(BaseHTTPEndpoint):
@@ -114,7 +133,7 @@ class TaskStatusEndpoint(BaseHTTPEndpoint):
             return self.success_response(status_info)
 
         except Exception as e:
-            return self.error_response(message=f"Failed to get task status: {str(e)}")
+            return self.error_response(ResponseCode.server_error, message=f"Failed to get task status: {str(e)}")
 
 
 class TaskCancelEndpoint(BaseHTTPEndpoint):
@@ -125,7 +144,7 @@ class TaskCancelEndpoint(BaseHTTPEndpoint):
                 "status": "CANCELLED",
             })
         except Exception as e:
-            return self.error_response(message=f"Failed to cancel task: {str(e)}")
+            return self.error_response(ResponseCode.server_error, message=f"Failed to cancel task: {str(e)}")
 
 
 class TaskRegisteredEndpoint(BaseHTTPEndpoint):
@@ -139,12 +158,76 @@ class TaskRegisteredEndpoint(BaseHTTPEndpoint):
                 "total": len(task_list),
             })
         except Exception as e:
-            return self.error_response(message=f"Failed to get tasks: {str(e)}")
+            return self.error_response(ResponseCode.server_error, message=f"Failed to get tasks: {str(e)}")
+
+
+class BatchTaskRunEndpoint(BaseHTTPEndpoint):
+    async def post(self, request):
+        task_map = {
+            "io_blocking_task": io_blocking_task,
+        }
+
+        data = await request.json()
+        task_name = data.get("task_name", "io_blocking_task")
+        task_func = task_map.get(task_name)
+
+        if not task_func:
+            return self.error_response(ResponseCode.not_found, message=f"Task {task_name} not found")
+
+        queue = data.get("queue", QUEUE_DEFAULT)
+        priority = data.get("priority")
+        count = data.get("count", 10)
+
+        if queue not in (QUEUE_HIGH, QUEUE_DEFAULT, QUEUE_LOW):
+            return self.error_response(
+                message=f"Invalid queue '{queue}'. Valid options: {QUEUE_HIGH}, {QUEUE_DEFAULT}, {QUEUE_LOW}"
+            )
+
+        task_ids = []
+        errors = []
+
+        _logger.info(
+            f"Batch dispatch: task_name={task_name}, queue={queue}, "
+            f"priority={priority}, count={count}"
+        )
+
+        for i in range(count):
+            try:
+                kicker = task_func.kicker()
+                send_labels = {"queue_name": queue}
+                if priority is not None:
+                    send_labels["priority"] = priority
+
+                task = await kicker.with_labels(**send_labels).kiq(i + 1)
+                task_ids.append(task.task_id)
+
+                if i < 3 or i == count - 1:
+                    _logger.debug(
+                        f"  [{i+1}/{count}] Dispatched task_id={task.task_id} to queue={queue}"
+                    )
+            except Exception as e:
+                error_msg = f"Task {i+1} failed: {str(e)}"
+                _logger.error(error_msg)
+                errors.append(error_msg)
+
+        _logger.info(
+            f"Batch complete: success={len(task_ids)}, failed={len(errors)}"
+        )
+
+        return self.success_response({
+            "task_name": task_name,
+            "queue": queue,
+            "priority": priority,
+            "task_ids": task_ids,
+            "count": len(task_ids),
+            "errors": errors if errors else None,
+        })
 
 
 router.add_route("/", TaskListEndpoint, methods=["GET"])
 router.add_route("/register", TaskRegisteredEndpoint, methods=["GET"])
 router.add_route("/run", TaskRunEndpoint, methods=["POST"])
+router.add_route("/batch", BatchTaskRunEndpoint, methods=["POST"])
 router.add_route("/{task_name}", TaskDetailEndpoint, methods=["GET"])
 router.add_route("/status/{task_id}", TaskStatusEndpoint, methods=["GET"])
 router.add_route("/cancel/{task_id}", TaskCancelEndpoint, methods=["POST"])

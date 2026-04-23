@@ -46,9 +46,10 @@ services:
     volumes:
       - ../:/app
     depends_on:
+      - rabbitmq
       - redis
       - postgres
-    command: python -m taskiq worker app.core.taskiq:redis_broker --workers 8
+    command: python -m taskiq worker app.core.taskiq:redis_broker app.tasks.scheduled_tasks --workers 2
     restart: unless-stopped
     networks:
       - app_network
@@ -63,6 +64,7 @@ services:
     volumes:
       - ../:/app
     depends_on:
+      - rabbitmq
       - redis
       - postgres
     command: python -m taskiq scheduler app.core.taskiq:scheduler

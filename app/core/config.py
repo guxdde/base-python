@@ -84,6 +84,15 @@ class CeleryConfig(BaseModel):
     beat: CeleryBeatConfig
     rabbitmq: CeleryRabbitMQConfig
 
+
+class TaskiqConfig(BaseModel):
+    """TaskIQ配置"""
+    broker_url: str
+    result_backend_url: str = "redis://:km111@127.0.0.1:6379/1"
+    workers: Optional[dict] = None
+    dead_letter: Optional[dict] = None
+
+
 class EmailConfig(BaseModel):
     """邮件配置"""
 
@@ -152,6 +161,7 @@ class Settings(BaseModel):
 
     # Celery 配置（可选）
     celery: Optional[CeleryConfig] = None
+    taskiq: Optional[TaskiqConfig] = None
 
     @classmethod
     def from_yaml(cls, yaml_path: str = "config.yaml") -> "Settings":
@@ -232,7 +242,8 @@ class Settings(BaseModel):
 
             parsed_config["celery"] = CeleryConfig(**celery)
 
-
+        if "taskiq" in config_data:
+            parsed_config["taskiq"] = TaskiqConfig(**config_data["taskiq"])
 
         return cls(**parsed_config)
 

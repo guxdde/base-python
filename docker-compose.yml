@@ -78,14 +78,47 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m taskiq worker app.core.taskiq:redis_broker --workers 8
+    command: python -m taskiq worker app.core.taskiq_broker_factory:get_broker_for_default app.tasks.scheduled_tasks --workers 2
+    environment:
+      - TZ=Asia/Shanghai
     depends_on:
+      - rabbitmq
       - redis
       - postgres
     volumes:
       - "./:/app"
+    networks:
+      - app_network
+
+  taskiq-worker-high:
+    image: base-python:1.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m taskiq worker app.core.taskiq_broker_factory:get_broker_for_high app.tasks.scheduled_tasks --workers 1
     environment:
       - TZ=Asia/Shanghai
+    depends_on:
+      - rabbitmq
+      - redis
+    volumes:
+      - "./:/app"
+    networks:
+      - app_network
+
+  taskiq-worker-low:
+    image: base-python:1.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m taskiq worker app.core.taskiq:get_broker_for_low app.tasks.scheduled_tasks --workers 1
+    environment:
+      - TZ=Asia/Shanghai
+    depends_on:
+      - rabbitmq
+      - redis
+    volumes:
+      - "./:/app"
     networks:
       - app_network
 
@@ -96,6 +129,7 @@ services:
       dockerfile: Dockerfile
     command: python -m taskiq scheduler app.core.taskiq:scheduler
     depends_on:
+      - rabbitmq
       - redis
       - postgres
     volumes:
