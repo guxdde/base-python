@@ -1,13 +1,14 @@
-# FastAPI 异步框架 + Celery 集成
+# FastAPI 异步框架 + TaskIQ
 
 ## 概述
 
-本项目是一个基于 FastAPI 的异步框架，集成 Celery 进行任务队列处理，支持任务自动注册、Beat 定时任务代码配置、数据库死信管理等功能。
+本项目是一个基于 FastAPI 的异步框架，集成 TaskIQ 进行任务队列处理，支持任务自动注册、定时任务调度、数据库死信管理等功能。
 
 ## 功能特性
 
-- **任务自动注册** - 使用 `@celery_task` 装饰器自动注册任务
-- **Beat 代码配置** - 使用装饰器配置定时任务，无需配置文件
+- **任务自动注册** - 使用 `@broker.task()` 装饰器自动注册任务
+- **多队列优先级** - high_priority / default / low_priority 三级队列
+- **定时任务** - 使用 TaskIQ Scheduler 配置定时任务
 - **数据库死信** - 任务失败自动记录到数据库，支持重试
 - **RESTful API** - 任务管理和死信管理的 HTTP 接口
 
@@ -16,7 +17,7 @@
 - Python 3.9+
 - MySQL 5.7+
 - Redis 5.0+
-- RabbitMQ (可选，作为 Celery broker)
+- RabbitMQ (TaskIQ Broker)
 
 ## 安装配置
 
@@ -53,18 +54,9 @@ rabbitmq:
   password: guest
   virtual_host: "/"
 
-celery:
-  result_backend: redis://localhost:6379/1
-  task_default_queue: default
-  task_acks_late: true
-  worker_prefetch_multiplier: 1
-  default_soft_time_limit: 30
-  default_time_limit: 60
-  rabbitmq:
-    enabled: true
-    exchange: dlx.exchange
-    queue: dlq.default
-    routing_key: dlq
+taskiq:
+  result_backend_url: redis://localhost:6379/1
+  broker_url: amqp://guest:guest@localhost:5672/
 ```
 
 ## 任务定义
@@ -72,87 +64,57 @@ celery:
 ### 基本任务
 
 ```python
-from app.core.celery import celery_task
+from app.core.taskiq import broker, QUEUE_DEFAULT
 
-@celery_task(queue='default', soft_time_limit=30)
-def add_task(a, b):
+@broker.task(queue_name=QUEUE_DEFAULT, priority=5, timeout=60)
+async def add_task(a: int, b: int):
     """计算两个数的和"""
     return a + b
+```
+
+### 队列优先级
+
+| 队列 | 常量 | 说明 |
+|------|------|------|
+| 高优先级 | `QUEUE_HIGH` | 紧急任务 |
+| 默认 | `QUEUE_DEFAULT` | 普通任务 |
+| 低优先级 | `QUEUE_LOW` | 后台任务 |
+
+```python
+from app.core.taskiq import broker, QUEUE_HIGH, QUEUE_DEFAULT, QUEUE_LOW
+
+# 高优先级任务
+@broker.task(queue_name=QUEUE_HIGH, priority=8, timeout=30)
+async def sync_market_data():
+    return {"status": "success"}
+
+# 低优先级任务
+@broker.task(queue_name=QUEUE_LOW, priority=2, timeout=600)
+async def generate_report():
+    return {"status": "success"}
 ```
 
 ### 任务参数
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `queue` | str | 任务队列名称 |
-| `soft_time_limit` | int | 软超时时间（秒） |
-| `time_limit` | int | 硬超时时间（秒） |
-| `name` | str | 任务名称（默认使用函数名） |
-| `description` | str | 任务描述 |
-| `tags` | list | 任务标签 |
+| `queue_name` | str | 任务队列名称 |
+| `priority` | int | 消息优先级 (1-10) |
+| `timeout` | int | 硬超时时间（秒） |
+| `soft_timeout` | int | 软超时时间（秒） |
 
 ## 定时任务配置
 
-### 使用 cron 表达式
+定时任务定义在 `app/tasks/scheduled_tasks.py`：
 
 ```python
-from app.core.beat import beat_scheduler
+from app.core.taskiq import scheduler, broker, QUEUE_HIGH
 
-# 每天凌晨2点执行
-@beat_scheduler.every("0 2 * * *")
-def daily_report():
+@broker.task(queue_name=QUEUE_HIGH, priority=5, timeout=60)
+async def sync_data():
     pass
 
-# 每5分钟执行
-@beat_scheduler.every("*/5 * * * *")
-def periodic_cleanup():
-    pass
-```
-
-### 使用 interval
-
-```python
-# 每30分钟执行
-@beat_scheduler.interval(minutes=30)
-def half_hourly_task():
-    pass
-
-# 每2小时执行
-@beat_scheduler.interval(hours=2)
-def hourly_task():
-    pass
-
-# 每60秒执行
-@beat_scheduler.interval(seconds=60)
-def frequent_task():
-    pass
-```
-
-### 使用 crontab 细粒度控制
-
-```python
-# 每周一至周五上午9点执行
-@beat_scheduler.crontab(hour="9", minute="0", day_of_week="1-5")
-def weekday_morning_task():
-    pass
-
-# 每月1日凌晨执行
-@beat_scheduler.crontab(hour="0", minute="0", day_of_month="1")
-def monthly_task():
-    pass
-```
-
-### 动态添加定时任务
-
-```python
-from app.core.beat import beat_scheduler
-
-beat_scheduler.add(
-    task_name="custom_task",
-    task="app.tasks.my_module.custom_task",
-    schedule=60,  # 每60秒
-    options={"queue": "default"}
-)
+# 使用 scheduler.schedule() 添加定时任务
 ```
 
 ## 启动服务
@@ -162,19 +124,22 @@ beat_scheduler.add(
 ```bash
 python main.py
 # 或
-uvicorn main:app --host 0.0.0.0 --port 8080
+uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-### 2. 启动 Celery Worker
+### 2. 启动 TaskIQ Worker
 
 ```bash
-celery -A main:celery_app worker --loglevel=info
+taskiq worker -m app.core.taskiq:broker
+
+# 或指定队列
+taskiq worker -m app.core.taskiq:broker -q default,high_priority,low_priority
 ```
 
-### 3. 启动 Celery Beat (定时任务)
+### 3. 启动定时任务调度器（可选）
 
 ```bash
-celery -A main:celery_app beat --loglevel=info
+taskiq scheduler -m app.core.taskiq:scheduler
 ```
 
 ## API 接口
@@ -186,6 +151,7 @@ celery -A main:celery_app beat --loglevel=info
 | `/api/tasks/` | GET | 列出所有任务 |
 | `/api/tasks/register` | GET | 获取已注册任务列表 |
 | `/api/tasks/run` | POST | 执行任务 |
+| `/api/tasks/batch` | POST | 批量执行任务 |
 | `/api/tasks/{task_name}` | GET | 获取任务详情 |
 | `/api/tasks/status/{task_id}` | GET | 查询任务状态 |
 | `/api/tasks/cancel/{task_id}` | POST | 取消任务 |
@@ -195,7 +161,20 @@ celery -A main:celery_app beat --loglevel=info
 ```bash
 curl -X POST http://localhost:8080/api/tasks/run \
   -H "Content-Type: application/json" \
-  -d '{"task_name": "add_task", "args": [1, 2]}'
+  -d '{"task_name": "add_task", "args": [1, 2], "kwargs": {}}'
+```
+
+#### 动态指定队列和优先级
+
+```bash
+curl -X POST http://localhost:8080/api/tasks/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_name": "add_task",
+    "args": [1, 2],
+    "queue": "high_priority",
+    "priority": 8
+  }'
 ```
 
 #### 查询任务状态
@@ -229,43 +208,28 @@ curl -X POST http://localhost:8080/api/dead-letters/1/retry \
 
 ```python
 # app/tasks/example.py
-from app.core.celery import celery_task
-from app.core.beat import beat_scheduler
+from app.core.taskiq import broker, QUEUE_HIGH, QUEUE_DEFAULT
 
 # 定义任务
-@celery_task(queue='default', soft_time_limit=60)
-def process_data(data_id: int):
+@broker.task(queue_name=QUEUE_DEFAULT, priority=5, timeout=60)
+async def process_data(data_id: int):
     """处理数据"""
-    # 业务逻辑
     result = f"Processed data {data_id}"
     return result
-
-# 定义定时任务
-@beat_scheduler.every("*/10 * * * *")
-def cleanup_expired_sessions():
-    """清理过期会话"""
-    # 清理逻辑
-    pass
 ```
 
 ### 在代码中调用任务
 
 ```python
-from app.factory import get_celery_app
+# 使用默认队列和优先级
+task = await process_data.kiq(123)
 
-# 获取 Celery 应用
-celery_app = get_celery_app()
-
-# 异步调用任务
-result = celery_app.send_task(
-    'add_task',
-    args=[1, 2],
-    kwargs={},
-    queue='default'
+# 动态覆盖队列和优先级
+kicker = process_data.kicker().with_labels(
+    queue_name=QUEUE_HIGH,
+    priority=8
 )
-
-# 获取任务 ID
-task_id = result.id
+task = await kicker.kiq(123)
 ```
 
 ## 项目结构
@@ -278,13 +242,12 @@ base-python/
 ├── app/
 │   ├── factory.py              # FastAPI 工厂
 │   ├── core/
-│   │   ├── celery.py           # Celery 核心
-│   │   ├── task_registry.py    # 任务注册表
-│   │   ├── beat.py             # Beat 调度器
-│   │   ├── dead_letter.py      # 死信管理器
+│   │   ├── taskiq.py           # TaskIQ broker 配置
 │   │   ├── config.py           # 配置管理
 │   │   ├── database.py         # 数据库
 │   │   └── redis.py            # Redis
+│   ├── tasks/
+│   │   └── scheduled_tasks.py  # 任务定义
 │   ├── models/
 │   │   └── dead_letter.py      # 死信模型
 │   └── api/
@@ -297,21 +260,28 @@ base-python/
 
 ## 常见问题
 
-### 1. Celery Worker 无法启动
+### 1. TaskIQ Worker 无法启动
 
-检查 `config.yaml` 中的 RabbitMQ/Redis 配置是否正确。
+检查 `config.yaml` 中的 RabbitMQ 配置是否正确。
 
 ### 2. 任务未自动注册
 
-确保任务模块被导入，`@celery_task` 装饰器在模块加载时执行注册。
+确保任务模块被导入，`@broker.task()` 装饰器在模块加载时执行注册。
 
-### 3. 定时任务不执行
+### 3. 消息发送失败 "Routing key '' is not valid"
 
-确保启动了 Celery Beat：
-```bash
-celery -A app.core.celery._celery_app_instance beat
+确保任务定义时设置了 `queue_name` label：
+```python
+@broker.task(queue_name=QUEUE_DEFAULT, ...)
 ```
 
-### 4. 死信未保存到数据库
+### 4. 定时任务不执行
+
+确保启动了 TaskIQ Scheduler：
+```bash
+taskiq scheduler -m app.core.taskiq:scheduler
+```
+
+### 5. 死信未保存到数据库
 
 检查数据库连接配置，确保 `dead_letter_records` 表已创建。

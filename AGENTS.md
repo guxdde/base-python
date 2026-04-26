@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-- **框架**: FastAPI (异步) + SQLAlchemy (异步 ORM) + Celery + Redis
+- **框架**: FastAPI (异步) + SQLAlchemy (异步 ORM) + TaskIQ + Redis
 - **Python 版本**: 3.9+
 - **配置**: 基于 YAML (`config.yaml`) + Pydantic 校验
 - **数据库**: MySQL/PostgreSQL (多数据库支持)
@@ -20,13 +20,13 @@ python main.py
 uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-### Celery Workers
+### TaskIQ Workers
 ```bash
-# 启动 Celery worker
-celery -A app.core.celery._celery_app_instance worker --loglevel=info
+# 启动 TaskIQ worker
+taskiq worker -m app.core.taskiq:broker
 
-# 启动 Celery Beat (定时任务)
-celery -A app.core.celery._celery_app_instance beat --loglevel=info
+# 或指定队列
+taskiq worker -m app.core.taskiq:broker -q default,high_priority,low_priority
 ```
 
 ### 运行测试
@@ -35,10 +35,10 @@ celery -A app.core.celery._celery_app_instance beat --loglevel=info
 pytest
 
 # 运行指定测试文件
-pytest tests/test_celery_integration.py
+pytest tests/test_taskiq_integration.py
 
 # 运行单个测试
-pytest tests/test_celery_integration.py::test_celery_task_decorator_basic -v
+pytest tests/test_taskiq_integration.py::test_taskiq_task_basic -v
 
 # 运行并生成覆盖率报告
 pytest --cov=app tests/
@@ -64,7 +64,7 @@ alembic upgrade head
 ### 命名规范
 - **文件**: snake_case (如 `task_registry.py`, `market_base_service.py`)
 - **类**: PascalCase (如 `DatabaseManager`, `MarketBaseService`)
-- **函数/变量**: snake_case (如 `get_session`, `celery_app`)
+- **函数/变量**: snake_case (如 `get_session`, `broker`)
 - **常量**: UPPER_SNAKE_CASE (如 `DEFAULT_TIMEOUT`)
 - **数据库表**: snake_case 加下划线
 
@@ -133,58 +133,36 @@ class Tenant(Base):
     status = Column(Enum(TenantStatusEnum), default=TenantStatusEnum.active)
 ```
 
-### Celery 任务
-- 使用 `app.core.celery` 的 `@celery_task` 装饰器
-- 通过装饰器参数定义队列、超时时间、重试策略
+### TaskIQ 任务
+- 使用 `app.core.taskiq.broker` 的 `.task()` 方法
+- 通过参数定义队列、优先级、超时时间
 
 ```python
-from app.core.celery import celery_task
+from app.core.taskiq import broker, QUEUE_HIGH, QUEUE_DEFAULT, QUEUE_LOW
 
-@celery_task(queue='default', soft_time_limit=30, time_limit=60)
-def process_task(data: dict) -> dict:
+@broker.task(queue_name=QUEUE_HIGH, priority=5, timeout=60)
+async def process_task(data: dict) -> dict:
     """处理任务并设置超时限制"""
     return {"result": "success"}
 ```
 
-### Celery 定时任务
-定时任务定义在 `app/tasks/scheduled_tasks.py`，使用 `BeatScheduler` 装饰器注册：
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `queue_name` | str | 队列名称 (high_priority/default/low_priority) |
+| `priority` | int | 消息优先级 (1-10) |
+| `timeout` | int | 硬超时时间（秒） |
+| `soft_timeout` | int | 软超时时间（秒） |
+
+### 发送任务
 
 ```python
-from app.core.beat import BeatScheduler
-from app.core.celery import celery_task
+# 使用任务定义的默认队列和优先级
+task = await task_func.kiq(arg1, arg2)
 
-# 方式1: Cron 表达式
-@BeatScheduler.every("*/5 * * * *")  # 每5分钟
-@celery_task()
-def sync_data():
-    pass
-
-# 方式2: 固定间隔
-@BeatScheduler.interval(hours=1)  # 每小时
-@celery_task()
-def cleanup():
-    pass
-
-# 方式3: 详细 Cron 参数
-@BeatScheduler.crontab(hour=9, minute=0)  # 每天9:00
-@celery_task()
-def daily_task():
-    pass
-
-# 方式4: 手动添加
-BeatScheduler.add(
-    task_name="weekly_task",
-    task="app.tasks.scheduled_tasks.weekly_task_func",
-    schedule="0 0 * * 1",  # 每周一
-)
+# 运行时覆盖队列和优先级
+kicker = task_func.kicker().with_labels(queue_name="high_priority", priority=8)
+task = await kicker.kiq(arg1, arg2)
 ```
-
-| 装饰器 | 参数 | 说明 |
-|--------|------|------|
-| `every()` | cron 字符串 | `"*/10 * * * *"` 每10分钟 |
-| `interval()` | seconds/minutes/hours | `hours=2` 每2小时 |
-| `crontab()` | minute/hour/day_of_month/month/day_of_week | 精确 Cron 参数 |
-| `add()` | task_name/task/schedule | 手动注册 |
 
 ### API 端点
 - 继承 `BaseHTTPEndpoint` 以保持响应格式一致
@@ -224,13 +202,12 @@ base-python/
 │   ├── factory.py            # FastAPI 工厂
 │   ├── tasks/                # 定时任务定义
 │   │   ├── __init__.py
-│   │   └── scheduled_tasks.py # 定时任务示例
+│   │   └── scheduled_tasks.py # 任务示例
 │   ├── core/                 # 核心组件
-│   │   ├── celery.py         # Celery 配置
+│   │   ├── taskiq.py         # TaskIQ 配置
 │   │   ├── config.py         # 配置模型
 │   │   ├── database.py       # 数据库管理
 │   │   ├── redis.py          # Redis 客户端
-│   │   ├── beat.py           # Celery Beat 调度器
 │   │   └── base_endpoint.py  # 基础 HTTP 端点
 │   ├── models/               # SQLAlchemy 模型
 │   ├── api/                  # API 端点
@@ -263,12 +240,16 @@ redis = get_redis_sync()
 value = redis.get(key)
 ```
 
-### 调用 Celery 任务
+### 调用 TaskIQ 任务
 ```python
-from app.factory import get_celery_app
+from app.core.taskiq import broker
 
-celery_app = get_celery_app()
-result = celery_app.send_task("task_name", args=[1, 2], kwargs={})
+# 通过 kicker 发送任务
+kicker = task_func.kicker().with_labels(queue_name="default")
+task = await kicker.kiq(arg1, arg2)
+
+# 或直接调用
+task = await task_func.kiq(arg1, arg2)
 ```
 
 ## AI Agent 注意事项

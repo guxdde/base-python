@@ -174,40 +174,23 @@ class BatchTaskRunEndpoint(BaseHTTPEndpoint):
         if not task_func:
             return self.error_response(ResponseCode.not_found, message=f"Task {task_name} not found")
 
-        queue = data.get("queue", QUEUE_DEFAULT)
-        priority = data.get("priority")
         count = data.get("count", 10)
-
-        if queue not in (QUEUE_HIGH, QUEUE_DEFAULT, QUEUE_LOW):
-            return self.error_response(
-                message=f"Invalid queue '{queue}'. Valid options: {QUEUE_HIGH}, {QUEUE_DEFAULT}, {QUEUE_LOW}"
-            )
 
         task_ids = []
         errors = []
 
-        _logger.info(
-            f"Batch dispatch: task_name={task_name}, queue={queue}, "
-            f"priority={priority}, count={count}"
-        )
-
         for i in range(count):
             try:
-                kicker = task_func.kicker()
-                send_labels = {"queue_name": queue}
-                if priority is not None:
-                    send_labels["priority"] = priority
-
-                task = await kicker.with_labels(**send_labels).kiq(i + 1)
+                task = await task_func.kiq(i + 1)
                 task_ids.append(task.task_id)
 
                 if i < 3 or i == count - 1:
                     _logger.debug(
-                        f"  [{i+1}/{count}] Dispatched task_id={task.task_id} to queue={queue}"
+                        f"  [{i+1}/{count}] Dispatched task_id={task.task_id}"
                     )
             except Exception as e:
                 error_msg = f"Task {i+1} failed: {str(e)}"
-                _logger.error(error_msg)
+                _logger.error(error_msg, exc_info=True)
                 errors.append(error_msg)
 
         _logger.info(
@@ -216,8 +199,6 @@ class BatchTaskRunEndpoint(BaseHTTPEndpoint):
 
         return self.success_response({
             "task_name": task_name,
-            "queue": queue,
-            "priority": priority,
             "task_ids": task_ids,
             "count": len(task_ids),
             "errors": errors if errors else None,

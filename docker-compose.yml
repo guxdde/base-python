@@ -78,7 +78,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m taskiq worker app.core.taskiq_broker_factory:get_broker_for_default app.tasks.scheduled_tasks --workers 2
+    command: taskiq worker -m app.core.taskiq_broker_factory:get_broker_for_default
     environment:
       - TZ=Asia/Shanghai
     depends_on:
@@ -95,7 +95,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m taskiq worker app.core.taskiq_broker_factory:get_broker_for_high app.tasks.scheduled_tasks --workers 1
+    command: taskiq worker -m app.core.taskiq_broker_factory:get_broker_for_high
     environment:
       - TZ=Asia/Shanghai
     depends_on:
@@ -111,7 +111,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m taskiq worker app.core.taskiq:get_broker_for_low app.tasks.scheduled_tasks --workers 1
+    command: taskiq worker -m app.core.taskiq_broker_factory:get_broker_for_low
     environment:
       - TZ=Asia/Shanghai
     depends_on:
@@ -127,7 +127,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m taskiq scheduler app.core.taskiq:scheduler
+    command: taskiq scheduler -m app.core.taskiq:scheduler
     depends_on:
       - rabbitmq
       - redis

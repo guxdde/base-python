@@ -49,7 +49,7 @@ services:
       - rabbitmq
       - redis
       - postgres
-    command: python -m taskiq worker app.core.taskiq:redis_broker app.tasks.scheduled_tasks --workers 2
+    command: taskiq worker -m app.core.taskiq:broker
     restart: unless-stopped
     networks:
       - app_network
@@ -67,7 +67,7 @@ services:
       - rabbitmq
       - redis
       - postgres
-    command: python -m taskiq scheduler app.core.taskiq:scheduler
+    command: taskiq scheduler -m app.core.taskiq:scheduler
     restart: unless-stopped
     networks:
       - app_network

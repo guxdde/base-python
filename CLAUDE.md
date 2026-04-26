@@ -7,19 +7,17 @@ This file provides guidance for Claude Code when working with this Python/FastAP
 ```
 app/
 ├── api/              # API routes
-│   ├── v1/          # API v1 routes
 │   └── tasks/       # Task-related routes
 ├── core/            # Core utilities
 │   ├── base_endpoint.py  # Base HTTP endpoint
-│   ├── celery.py         # Celery task configuration
-│   ├── database.py       # Database connection/session
-│   ├── logger.py         # Logging configuration
-│   ├── redis.py          # Redis client wrapper
-│   └── config.py         # Settings/Configuration
-├── models/          # Data models (Pydantic/SQLAlchemy)
-├── schemas/         # Request/Response schemas
-├── tasks/           # Celery task definitions
-└── main.py          # FastAPI application entry point
+│   ├── taskiq.py        # TaskIQ broker configuration
+│   ├── database.py     # Database connection/session
+│   ├── logger.py      # Logging configuration
+│   ├── redis.py      # Redis client wrapper
+│   └── config.py     # Settings/Configuration
+├── models/          # Data models (SQLAlchemy)
+├── tasks/           # Task definitions
+└── factory.py      # FastAPI application factory
 ```
 
 ## Key Components
@@ -31,24 +29,56 @@ app/
 
 ### 2. Database
 - Connection: `core.database` module
-- Session management: `get_session()`, `SessionLocal`, or `create_session()`
+- Session management: `get_session()`, or use `DatabaseManager`
 - Async support: `await get_session()` for async operations
 
 ### 3. Redis
 - Client: `core.redis` module with `RedisService` class
 - Global instance: `redis_service`
-- Functions: `get_redis()`, `get_redis_sync()`, `init_redis_client()` context manager
 - Features: Auto-reconnect, health checks, retry logic
 
-### 4. Celery Tasks
-- Configuration: `core.celery` module
-- Task decorator: `@celery_task` for auto-registration
-- Broker: RabbitMQ (AMQP) with fallback to Redis
-- Features: Dead letter queues, beat scheduler, signal handlers for resource injection
+### 4. TaskIQ Tasks (Replaced Celery)
+- Broker: `app.core.taskiq.broker` (AioPikaBroker with RabbitMQ)
+- Task decorator: `@broker.task()` for task registration
+- Result backend: Redis
+- Features: Multi-queue priority, task scheduling, dependency injection
 
 ### 5. Configuration
-- Settings: `core.config.settings` (likely Pydantic Settings)
-- Environment variables: Loaded via `python-dotenv` or similar
+- Settings: `core.config.settings` (Pydantic Settings)
+- Environment variables: Loaded via `config.yaml`
+
+## TaskIQ Configuration
+
+### Task Queues
+Three priority levels: `high_priority`, `default`, `low_priority`
+
+```python
+from app.core.taskiq import broker, QUEUE_HIGH, QUEUE_DEFAULT, QUEUE_LOW
+
+@broker.task(queue_name=QUEUE_HIGH, priority=5, timeout=60)
+async def sync_market_data():
+    return {"status": "success"}
+```
+
+### Task Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `queue_name` | str | Queue name (high_priority/default/low_priority) |
+| `priority` | int | Message priority (1-10, higher = more priority) |
+| `timeout` | int | Hard timeout in seconds |
+| `soft_timeout` | int | Soft timeout in seconds |
+
+### Sending Tasks
+
+```python
+# Using default labels from task definition
+task = await task_func.kiq(arg1, arg2)
+
+# Override labels at runtime
+kicker = task_func.kicker().with_labels(queue_name="high_priority", priority=8)
+task = await kicker.kiq(arg1, arg2)
+```
 
 ## Common Patterns
 
@@ -61,14 +91,13 @@ class MyEndpoint(BaseHTTPEndpoint):
         return self.success_response({"data": "value"})
 ```
 
-### Creating Celery Tasks
+### Creating TaskIQ Tasks
 ```python
-from app.core import celery
+from app.core.taskiq import broker, QUEUE_HIGH
 
-@celery_task(queue='high', soft_time_limit=300, time_limit=600)
-def my_task(arg1, arg2):
-    # Task implementation
-    pass
+@broker.task(queue_name=QUEUE_HIGH, priority=5, timeout=60)
+async def my_task(data: dict):
+    return {"result": data}
 ```
 
 ### Using Redis
@@ -83,36 +112,34 @@ async def use_redis():
 
 ### Using Database
 ```python
-from app.core import database
+from app.core.database import DatabaseManager, db
 
 async def use_db():
-    session = await database.get_session()
-    # Use session for queries
-    await session.close()
+    async with dbm.session("default") as session:
+        result = await session.execute(select(Model))
+        await session.commit()
 ```
 
 ## Important Notes
 
-1. **Redis Connection**: Uses lazy initialization with health checks and automatic reconnection
-2. **Celery Broker**: Prefers RabbitMQ, falls back to Redis if unavailable
-3. **Task Signals**: Automatically injects DB session and Redis client into tasks
-4. **Dead Letter Queues**: Tasks can be configured with DLX for retry management
-5. **Beat Scheduler**: Supports both code-defined schedules and settings-based schedules
+1. **Redis Connection**: Uses lazy initialization with health checks
+2. **TaskIQ Broker**: Uses RabbitMQ (aio-pika) with taskiq-aio-pika
+3. **is_worker_process**: Used to distinguish API vs Worker process
+4. **Multi-queue Priority**: Uses DIRECT exchange with routing keys
 
 ## File Locations
 
-- Main app: `app/main.py`
+- Main app: `main.py`
 - Config: `app/core/config.py`
 - Database: `app/core/database.py`
 - Redis: `app/core/redis.py`
-- Celery: `app/core/celery.py`
-- Tasks: `app/tasks/` and `app/api/tasks/`
-- Beat scheduler: `app/beat.py`
-- Dead letter manager: `app/dead_letter.py`
+- TaskIQ: `app/core/taskiq.py`
+- Tasks: `app/tasks/`
+- API: `app/api/tasks/`
 
 ## Testing Tips
 
 1. Check Redis connectivity: `await redis_service.ping()`
-2. Verify Celery app: `get_celery_app()`
+2. Verify TaskIQ broker: `broker.is_worker_process`
 3. Test database session: `await database.get_session()`
 4. Check settings: `settings` object attributes

@@ -5,41 +5,35 @@ TaskIQ broker 工厂函数 - 支持多队列 worker 配置
 Worker 通过 broker factory 函数来获取对应队列的 broker。
 """
 
-from functools import lru_cache
+from taskiq_aio_pika import AioPikaBroker
 
-from taskiq_aio_pika import AioPikaBroker, Queue
-
-from .taskiq import redis_broker, task_queues, QUEUE_HIGH, QUEUE_DEFAULT, QUEUE_LOW
+from .taskiq import broker, task_queues, QUEUE_HIGH, QUEUE_DEFAULT, QUEUE_LOW
 
 
-@lru_cache
 def get_broker_for_default() -> AioPikaBroker:
     """获取监听 default 队列的 broker"""
-    return redis_broker.with_queues(
+    return broker.with_queues(
         *[q for q in task_queues if q.name == QUEUE_DEFAULT]
     )
 
 
-@lru_cache
 def get_broker_for_high() -> AioPikaBroker:
     """获取监听 high_priority 队列的 broker"""
-    return redis_broker.with_queues(
+    return broker.with_queues(
         *[q for q in task_queues if q.name == QUEUE_HIGH]
     )
 
 
-@lru_cache
 def get_broker_for_low() -> AioPikaBroker:
     """获取监听 low_priority 队列的 broker"""
-    return redis_broker.with_queues(
+    return broker.with_queues(
         *[q for q in task_queues if q.name == QUEUE_LOW]
     )
 
 
-@lru_cache
 def get_broker_for_all() -> AioPikaBroker:
     """获取监听所有队列的 broker（默认行为）"""
-    return redis_broker
+    return broker
 
 
 def get_broker(queue_name: str) -> AioPikaBroker:

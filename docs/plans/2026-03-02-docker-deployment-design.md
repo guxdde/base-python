@@ -13,32 +13,32 @@
 ## 2. 架构设计
 
 ```
-                    ┌─────────────────┐
-                    │   OpenResty     │
-                    │  (反向代理/网关)  │
-                    └────────┬────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              │              │              │
-              ▼              ▼              ▼
-        ┌──────────┐  ┌──────────┐   ┌──────────┐
-        │  FastAPI │  │  Celery  │   │  Celery  │
-        │   API    │  │  Worker  │   │   Beat   │
-        └────┬─────┘  └────┬─────┘   └──────────┘
-             │             │
-             └─────────────┼─────────────┐
-                           │             │
-                           ▼             ▼
-                    ┌──────────┐   ┌──────────┐
-                    │RabbitMQ  │   │   Redis  │
-                    │(Broker)  │   │ (Cache)  │
-                    └──────────┘   └──────────┘
-                           │
-                           ▼
-                    ┌──────────────┐
-                    │ PostgreSQL   │
-                    │(TimescaleDB) │
-                    └──────────────┘
+                     ┌─────────────────┐
+                     │   OpenResty     │
+                     │  (反向代理/网关)  │
+                     └────────┬────────┘
+                              │
+               ┌──────────────┼──────────────┐
+               │              │              │
+               ▼              ▼              ▼
+         ┌──────────┐  ┌──────────┐   ┌──────────┐
+         │  FastAPI │  │  TaskIQ  │   │  TaskIQ  │
+         │   API    │  │  Worker │   │Scheduler │
+         └────┬─────┘  └────┬─────┘   └──────────┘
+              │             │
+              └─────────────┼─────────────┐
+                            │             │
+                            ▼             ▼
+                     ┌──────────┐   ┌──────────┐
+                     │RabbitMQ  │   │   Redis  │
+                     │(Broker)  │   │ (Cache)  │
+                     └──────────┘   └──────────┘
+                            │
+                            ▼
+                     ┌──────────────┐
+                     │ PostgreSQL   │
+                     │(TimescaleDB) │
+                     └──────────────┘
 ```
 
 ---
@@ -47,13 +47,13 @@
 
 | 组件 | 版本 | 说明 |
 |------|------|------|
-| **Redis** | 7.2-alpine | 轻量、稳定，用于缓存/会话 |
+| **Redis** | 7.2-alpine | 轻量、稳定，用于缓存/结果后端 |
 | **PostgreSQL** | 17.5-timescaledb | 时序数据库扩展 |
-| **RabbitMQ** | 3.12-management-alpine | Celery Broker，含管理界面 |
+| **RabbitMQ** | 3.12-management-alpine | TaskIQ Broker，含管理界面 |
 | **OpenResty** | 1.25-alpine | Nginx + Lua，支持动态配置 |
 | **Python** | 3.12-slim | 应用运行环境 |
 | **FastAPI** | latest | ASGI Web 框架 |
-| **Celery** | 5.3 | 分布式任务队列 |
+| **TaskIQ** | latest | 分布式任务队列 |
 
 ### RabbitMQ 插件
 - `rabbitmq_management` - Web 管理界面
@@ -189,13 +189,13 @@ fastapi:
   restart: unless-stopped
 ```
 
-### 6.3 Celery Worker
+### 6.3 TaskIQ Worker
 ```yaml
-celery-worker:
+taskiq-worker:
   build:
     context: ../src
     dockerfile: Dockerfile
-  container_name: app-celery-worker
+  container_name: app-tiq-worker
   env_file:
     - .env
   volumes:
@@ -204,17 +204,17 @@ celery-worker:
     - rabbitmq
     - redis
     - postgres
-  command: celery -A worker worker --loglevel=info --concurrency=6 -n worker1@%h
+  command: taskiq worker -m app.core.taskiq:broker -q default,high_priority,low_priority
   restart: unless-stopped
 ```
 
-### 6.4 Celery Beat (定时任务)
+### 6.4 TaskIQ Scheduler (定时任务)
 ```yaml
-celery-beat:
+taskiq-scheduler:
   build:
     context: ../src
     dockerfile: Dockerfile
-  container_name: app-celery-beat
+  container_name: app-tiq-scheduler
   env_file:
     - .env
   volumes:
@@ -222,8 +222,7 @@ celery-beat:
   depends_on:
     - rabbitmq
     - redis
-    - postgres
-  command: celery -A worker beat --loglevel=info
+  command: taskiq scheduler -m app.core.taskiq:scheduler
   restart: unless-stopped
 ```
 
@@ -318,9 +317,9 @@ RABBITMQ_HOST=rabbitmq
 RABBITMQ_PORT=5672
 RABBITMQ_VHOST=/
 
-# Celery
-CELERY_BROKER_URL=amqp://admin:changeme@rabbitmq:5672/
-CELERY_RESULT_BACKEND=redis://redis:6379/0
+# TaskIQ
+TASKIQ_BROKER_URL=amqp://admin:changeme@rabbitmq:5672/
+TASKIQ_RESULT_BACKEND_URL=redis://redis:6379/0
 
 # FastAPI
 APP_ENV=production
@@ -371,7 +370,7 @@ docker-compose -f infra.yml -f app.yml logs -f
 
 # 指定服务
 docker-compose -f app.yml logs -f fastapi
-docker-compose -f app.yml logs -f celery-worker
+docker-compose -f app.yml logs -f taskiq-worker
 ```
 
 ### 9.6 访问地址
@@ -403,7 +402,7 @@ mysql:
 - 集成 ELK/Loki
 
 ### 10.4 高可用
-- Celery Worker 多容器部署
+- TaskIQ Worker 多容器部署
 - 使用 Docker Swarm 或 Kubernetes
 
 ---
@@ -417,14 +416,21 @@ mysql:
 - 向后兼容 Nginx
 - 适合后期集群化扩展
 
-### 11.2 RabbitMQ vs Redis (Celery Broker)
+### 11.2 RabbitMQ vs Redis (TaskIQ Broker)
 选择 RabbitMQ 因为：
 - 完善的消息确认机制 (Ack)
 - 支持延迟队列（插件）
 - 更高的可靠性
 - 适合生产环境
 
-### 11.3 PostgreSQL + TimescaleDB
+### 11.3 TaskIQ vs Celery
+选择 TaskIQ 因为：
+- 原生异步支持，与 FastAPI 更好集成
+- 更轻量，依赖更少
+- 内置调度器支持
+- 支持依赖注入 (taskiq-fastapi)
+
+### 11.4 PostgreSQL + TimescaleDB
 - 支持时序数据（TimescaleDB 扩展）
 - 与 MySQL RDS 用途不同（时序 vs 关系）
 - 17.5 版本与生产环境一致

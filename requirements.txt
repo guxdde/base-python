@@ -17,6 +17,7 @@ redis>=5.0.0
 taskiq[cli]>=0.12.0
 taskiq-redis
 taskiq-aio-pika>=0.6.0
+taskiq-fastapi>=0.5.0
 croniter>=5.0.1
 
 # Config

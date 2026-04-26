@@ -11,12 +11,22 @@ import logging
 from typing import Optional, List
 from taskiq import TaskiqScheduler
 from taskiq.schedule_sources import LabelScheduleSource
-from taskiq_aio_pika import AioPikaBroker, Queue, QueueType
+from taskiq_aio_pika import AioPikaBroker, Queue, QueueType, Exchange
 from taskiq_redis import RedisAsyncResultBackend
+from aio_pika import ExchangeType
+import taskiq_fastapi
 
 from .config import settings
 
 _logger = logging.getLogger(__name__)
+
+# Exchange 配置 - 使用 DIRECT 类型进行精确路由
+taskiq_exchange = Exchange(
+    name="taskiq_direct",
+    type=ExchangeType.DIRECT,
+    durable=True,
+    declare=True,
+)
 
 # Create Redis result backend
 result_backend = RedisAsyncResultBackend(
@@ -32,18 +42,20 @@ QUEUE_LOW = "low_priority"
 # 获取环境变量中的队列名称（默认使用 default 队列）
 QUEUE_NAME = os.getenv("TASKIQ_QUEUE", QUEUE_DEFAULT)
 
-# 定义三个优先级的队列，使用不同的 routing_key 实现路由
+# 定义三个优先级的队列，使用相同的 max_priority 以支持细粒度优先级控制
+# 队列通过 routing_key 实现路由，消息通过 priority label 设置优先级
 task_queues: List[Queue] = [
     Queue(name=QUEUE_HIGH, routing_key=QUEUE_HIGH, max_priority=10),
-    Queue(name=QUEUE_DEFAULT, routing_key=QUEUE_DEFAULT, max_priority=5),
-    Queue(name=QUEUE_LOW, routing_key=QUEUE_LOW, max_priority=1),
+    Queue(name=QUEUE_DEFAULT, routing_key=QUEUE_DEFAULT, max_priority=10),
+    Queue(name=QUEUE_LOW, routing_key=QUEUE_LOW, max_priority=10),
 ]
 
 # 使用 RabbitMQ 作为 broker
-redis_broker = AioPikaBroker(
+broker = AioPikaBroker(
     url=settings.taskiq.broker_url,
-    queue_name=QUEUE_NAME,  # 默认队列
+    # queue_name=QUEUE_NAME,
     task_queues=task_queues,
+    exchange=taskiq_exchange,
 )
 
 _logger.info(
@@ -52,81 +64,25 @@ _logger.info(
 )
 
 # Alias for backward compatibility
-taskiq_app = redis_broker
-
-
-# Task decorator replacement for @celery_task
-def taskiq_task(
-    queue: str = QUEUE_DEFAULT,
-    priority: Optional[int] = None,
-    timeout: Optional[int] = None,
-    soft_timeout: Optional[int] = None,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-    tags: Optional[list] = None,
-):
-    """
-    Decorator for creating TaskIQ tasks with multi-queue priority support.
-
-    Args:
-        queue: Task queue name - determines routing_key for message routing
-               Options: "high_priority", "default", "low_priority"
-        priority: Message priority (overrides queue default priority)
-                  Higher number = higher priority in queue
-        timeout: Hard timeout in seconds
-        soft_timeout: Soft timeout in seconds
-        name: Custom task name
-        description: Task description
-        tags: List of tags for the task
-
-    Usage:
-        @taskiq_task(queue="high_priority", priority=8)
-        async def my_task(arg1: str):
-            return {"result": arg1}
-    """
-    def decorator(func):
-        labels = {"queue_name": queue}
-        if priority is not None:
-            labels["priority"] = priority
-
-        task_func = redis_broker.task(
-            timeout=timeout,
-            soft_timeout=soft_timeout,
-            name=name or func.__name__,
-            labels=labels,
-        )(func)
-
-        task_func.queue = queue
-        task_func.priority = priority
-        task_func.timeout = timeout
-        task_func.soft_timeout = soft_timeout
-        task_func.description = description
-        task_func.tags = tags or []
-
-        _logger.debug(
-            f"Registered task '{func.__name__}' with queue='{queue}', "
-            f"priority={priority}, routing_key='{queue}'"
-        )
-
-        return task_func
-
-    return decorator
+taskiq_app = broker
 
 
 # TaskIQ Scheduler for periodic tasks
 scheduler = TaskiqScheduler(
-    broker=redis_broker,
-    sources=[LabelScheduleSource(redis_broker)],
+    broker=broker,
+    sources=[LabelScheduleSource(broker)],
 )
+
+taskiq_fastapi.init(broker, "app.factory:create_app")
 
 
 # Export for easy import
 __all__ = [
     "taskiq_app",
-    "redis_broker",
-    "taskiq_task",
+    "broker",
     "scheduler",
     "result_backend",
+    "taskiq_exchange",
     "QUEUE_NAME",
     "QUEUE_HIGH",
     "QUEUE_DEFAULT",
